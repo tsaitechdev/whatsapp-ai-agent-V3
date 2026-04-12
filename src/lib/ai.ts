@@ -27,7 +27,7 @@ export async function getAIResponse(
 
   const chat = model.startChat({
     history: history,
-    systemInstruction: { parts: [{ text: HARVEY_SYSTEM_PROMPT }] },
+    systemInstruction:HARVEY_SYSTEM_PROMPT,
   });
 
   const result = await chat.sendMessage(lastUserMessage);
