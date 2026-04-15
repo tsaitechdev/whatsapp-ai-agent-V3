@@ -4,6 +4,39 @@ import { supabase } from "@/lib/supabase";
 import { sendWhatsAppMessage } from "@/lib/whatsapp";
 import { getAIResponse } from "@/lib/ai";
 
+const PHONE_NUMBER_ID = "275705968959951";
+const FLOW_ID = "1084065951453992";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
+
+async function sendFlow(to: string) {
+  await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        header: { type: 'text', text: 'Finjoat Loan Check' },
+        body: { text: 'Check eligibility from 12 banks in 60 seconds' },
+        footer: { text: 'Takes less than 1 minute' },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_id: FLOW_ID,
+            flow_cta: 'Start'
+          }
+        }
+      }
+    })
+  });
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const mode = searchParams.get("hub.mode");
@@ -51,29 +84,54 @@ export async function POST(request: NextRequest) {
     return Response.json({ status: "ignored" });
   }
 
-  const entry = body.entry?.[0];
-  const changes = entry?.changes?.[0];
-  const value = changes?.value;
+  // Acknowledge the webhook immediately to prevent retries
+  // Process the webhook asynchronously
+  processWebhook(body);
+  return Response.json({ status: "received" });
+}
 
-  // Only process actual messages (not status updates)
-  if (!value?.messages?.[0]) {
-    return Response.json({ status: "no_message" });
-  }
-
-  const message = value.messages[0];
-  const contact = value.contacts?.[0];
-
-  // Only handle text messages
-  if (message.type !== "text") {
-    return Response.json({ status: "non_text" });
-  }
-
-  const phone = message.from;
-  const text = message.text.body;
-  const name = contact?.profile?.name || null;
-  const whatsappMsgId = message.id;
-
+async function processWebhook(body: any) {
   try {
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+
+    // Only process actual messages (not status updates)
+    if (!value?.messages?.[0]) {
+      return Response.json({ status: "no_message" });
+    }
+
+    const message = value.messages[0];
+    const contact = value.contacts?.[0];
+
+
+    const phone = message.from;
+    const name = contact?.profile?.name || null;
+    const whatsappMsgId = message.id;
+
+    if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
+      const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
+      
+      await supabase.from("conversations").update({
+        employment_type: flowData.employment_type,
+        income_range: flowData.income_range,
+        cibil_range: flowData.cibil_range,
+        loan_type: flowData.loan_type,
+        loan_amount: flowData.loan_amount,
+        city: flowData.city,
+        timeline: flowData.timeline,
+        status: 'qualified',
+        qualified_at: new Date().toISOString(),
+        flow_data: flowData,
+        last_flow_sent: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }).eq("phone", phone);
+
+      await sendWhatsAppMessage(phone, 
+        `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
+      return;
+    }
+
     // Find or create conversation
     let { data: conversation } = await supabase
       .from("conversations")
@@ -96,68 +154,95 @@ export async function POST(request: NextRequest) {
     }
 
     if (!conversation) {
-      return Response.json({ error: "Failed to create conversation" }, { status: 500 });
+      return; // No response needed since this is fire and forget
     }
 
-    // Store user message (ignore duplicates)
-    const { error: insertError } = await supabase.from("messages").insert({
-      conversation_id: conversation.id,
-      role: "user",
-      content: text,
-      whatsapp_msg_id: whatsappMsgId,
-    });
+    if (message.type === 'text') {
+      const text = message.text.body;
+      const hasReferral = !!value.referral;
+      const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|start|good)/.test(text.toLowerCase());
+      const isLoanIntent = /(loan|eligib|check|apply|cibil|personal|fund|paisa|amount|lakh)/.test(text.toLowerCase());
+      const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(text.toLowerCase());
+      const alreadyQualified = !!conversation.qualified_at;
 
-    if (insertError?.code === "23505") {
-      // Duplicate message, ignore
-      return Response.json({ status: "duplicate" });
+      // Store user message
+      const { error: insertError } = await supabase.from("messages").insert({
+        conversation_id: conversation.id,
+        role: "user",
+        content: text,
+        whatsapp_msg_id: whatsappMsgId,
+      });
+
+      if (insertError?.code === "23505") {
+        // Duplicate message, ignore
+        return;
+      }
+
+      // Update conversation timestamp
+      await supabase
+        .from("conversations")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", conversation.id);
+
+
+      // Human handoff
+      if (wantsHuman) {
+        await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
+        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We'll call within 10 minutes.");
+        return;
+      }
+
+      // Send Flow for new users, ad clicks, greetings, or loan intent
+      if (!alreadyQualified && (hasReferral || isGreeting || isLoanIntent)) {
+        await supabase.from("conversations").update({ 
+          last_flow_sent: new Date().toISOString() 
+        }).eq("id", conversation.id);
+        await sendFlow(phone);
+        return;
+      }
+
+      // If mode is 'human', don't auto-reply
+      if (conversation.mode === "human") {
+        return;
+      }
+
+      // Otherwise continue to existing Gemini logic
+      // Fetch conversation history (last 20 messages for context)
+      const { data: history } = await supabase
+        .from("messages")
+        .select("role, content")
+        .eq("conversation_id", conversation.id)
+        .order("created_at", { ascending: true })
+        .limit(20);
+
+      // Get AI response
+      const aiResponse = await getAIResponse(
+        (history || []).map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }))
+      );
+
+      // Send response via WhatsApp
+      await sendWhatsAppMessage(phone, aiResponse);
+
+      // Store AI response
+      await supabase.from("messages").insert({
+        conversation_id: conversation.id,
+        role: "assistant",
+        content: aiResponse,
+      });
+
+      // Update conversation timestamp again
+      await supabase
+        .from("conversations")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", conversation.id);
     }
-
-    // Update conversation timestamp
-    await supabase
-      .from("conversations")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", conversation.id);
-
-    // If mode is 'human', don't auto-reply
-    if (conversation.mode === "human") {
-      return Response.json({ status: "stored_for_human" });
-    }
-
-    // Fetch conversation history (last 20 messages for context)
-    const { data: history } = await supabase
-      .from("messages")
-      .select("role, content")
-      .eq("conversation_id", conversation.id)
-      .order("created_at", { ascending: true })
-      .limit(20);
-
-    // Get AI response
-    const aiResponse = await getAIResponse(
-      (history || []).map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }))
-    );
-
-    // Send response via WhatsApp
-    await sendWhatsAppMessage(phone, aiResponse);
-
-    // Store AI response
-    await supabase.from("messages").insert({
-      conversation_id: conversation.id,
-      role: "assistant",
-      content: aiResponse,
-    });
-
-    // Update conversation timestamp again
-    await supabase
-      .from("conversations")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", conversation.id);
 
     return Response.json({ status: "replied" });
   } catch (error) {
     console.error("Webhook error:", error);
-    return Response.json({ status: "error" }, { status: 500 });
+    // return Response.json({ status: "error" }, { status: 500 }); // Do not return response here
   }
 }
