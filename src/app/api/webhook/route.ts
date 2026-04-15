@@ -9,32 +9,41 @@ const FLOW_ID = "1084065951453992";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 
 async function sendFlow(to: string) {
-  await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'interactive',
-      interactive: {
-        type: 'flow',
-        header: { type: 'text', text: 'Finjoat Loan Check' },
-        body: { text: 'Check eligibility from 12 banks in 60 seconds' },
-        footer: { text: 'Takes less than 1 minute' },
-        action: {
-          name: 'flow',
-          parameters: {
-            flow_message_version: '3',
-            flow_id: FLOW_ID,
-            flow_cta: 'Start'
+  try {
+    const response = await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+          type: 'flow',
+          header: { type: 'text', text: 'Finjoat Loan Check' },
+          body: { text: 'Check eligibility from 12 banks in 60 seconds' },
+          footer: { text: 'Takes less than 1 minute' },
+          action: {
+            name: 'flow',
+            parameters: {
+              flow_message_version: '3',
+              flow_id: FLOW_ID,
+              flow_cta: 'Start'
+            }
           }
         }
-      }
-    })
-  });
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`FAIL: sendFlow returned status ${response.status}:`, errorData);
+    }
+  } catch (error) {
+    console.error("FAIL: Error executing sendFlow fetch request:", error);
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -59,16 +68,33 @@ export async function POST(request: NextRequest) {
   console.log("=== START ===", new Date().toISOString());
 
   const WEBHOOK_SECRET = process.env.WHATSAPP_APP_SECRET || "";
-  const signature = request.headers.get("X-Hub-Signature-256") || "";
+  const signature = request.headers.get("X-Hub-Signature-256");
+  
+  if (!signature) {
+    console.log("FAIL: No signature header");
+    return new Response("Invalid", { status: 403 });
+  }
+
   const rawBody = await request.text();
 
   const [algo, hash] = signature.split("=");
+  
+  if (!algo || !hash) {
+    console.log("FAIL: Malformed signature header");
+    return new Response("Invalid", { status: 403 });
+  }
+
   const hmac = crypto.createHmac(algo, WEBHOOK_SECRET);
   hmac.update(rawBody);
   const digest = hmac.digest("hex");
 
-  if (hash!== digest) {
-    console.log("FAIL: Bad signature");
+  try {
+    if (hash.length !== digest.length || !crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(digest))) {
+      console.log("FAIL: Bad signature");
+      return new Response("Invalid", { status: 403 });
+    }
+  } catch (e) {
+    console.log("FAIL: Signature comparison error", e);
     return new Response("Invalid", { status: 403 });
   }
 
@@ -109,26 +135,30 @@ async function processWebhook(body: any) {
     const whatsappMsgId = message.id;
 
     if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
-      const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
+      try {
+        const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
 
-      await supabase.from("conversations").update({
-        employment_type: flowData.employment_type,
-        income_range: flowData.income_range,
-        cibil_range: flowData.cibil_range,
-        loan_type: flowData.loan_type,
-        loan_amount: flowData.loan_amount,
-        city: flowData.city,
-        timeline: flowData.timeline,
-        status: 'qualified',
-        qualified_at: new Date().toISOString(),
-        flow_data: flowData,
-        last_flow_sent: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }).eq("phone", phone);
+        await supabase.from("conversations").update({
+          employment_type: flowData.employment_type,
+          income_range: flowData.income_range,
+          cibil_range: flowData.cibil_range,
+          loan_type: flowData.loan_type,
+          loan_amount: flowData.loan_amount,
+          city: flowData.city,
+          timeline: flowData.timeline,
+          status: 'qualified',
+          qualified_at: new Date().toISOString(),
+          flow_data: flowData,
+          last_flow_sent: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }).eq("phone", phone);
 
-      await sendWhatsAppMessage(phone,
-        `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
-      console.log("PASS: Processing interactive nfm_reply message");
+        await sendWhatsAppMessage(phone,
+          `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
+        console.log("PASS: Processing interactive nfm_reply message");
+      } catch (parseError) {
+        console.error("FAIL: Error parsing flow JSON:", parseError);
+      }
       return;
     }
 
@@ -185,11 +215,16 @@ async function processWebhook(body: any) {
         .update({ updated_at: new Date().toISOString() })
         .eq("id", conversation.id);
 
-
       // Human handoff
       if (wantsHuman) {
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
         await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We\'ll call within 10 minutes.");
+        return;
+      }
+
+      // If mode is 'human' (and they didn't explicitly ask for a human just now), don't auto-reply
+      if (conversation.mode === "human") {
+        console.log("PASS: Conversation is in human mode, skipping auto-reply.");
         return;
       }
 
@@ -199,11 +234,6 @@ async function processWebhook(body: any) {
           last_flow_sent: new Date().toISOString()
         }).eq("id", conversation.id);
         await sendFlow(phone);
-        return;
-      }
-
-      // If mode is 'human', don't auto-reply
-      if (conversation.mode === "human") {
         return;
       }
 
