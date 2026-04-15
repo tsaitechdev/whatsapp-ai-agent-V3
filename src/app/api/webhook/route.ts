@@ -56,36 +56,33 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  console.log("Webhook POST request received!");
-  console.log("Headers:", request.headers);
-  console.log("Method:", request.method);
+  console.log("=== START ===", new Date().toISOString());
+
   const WEBHOOK_SECRET = process.env.WHATSAPP_APP_SECRET || "";
-  const signature = request.headers.get("X-Hub-Signature-256");
-
-  if (!signature) {
-    return new Response("No signature header", { status: 400 });
-  }
-
+  const signature = request.headers.get("X-Hub-Signature-256") || "";
   const rawBody = await request.text();
-  const [algo, hash] = signature.split("=");
 
+  const [algo, hash] = signature.split("=");
   const hmac = crypto.createHmac(algo, WEBHOOK_SECRET);
   hmac.update(rawBody);
   const digest = hmac.digest("hex");
 
-  if (hash !== digest) {
-    return new Response("Invalid signature", { status: 403 });
+  if (hash!== digest) {
+    console.log("FAIL: Bad signature");
+    return new Response("Invalid", { status: 403 });
   }
 
   const body = JSON.parse(rawBody);
+  console.log("Object:", body.object);
 
-  // Only process whatsapp_business_account events
-  if (body.object !== "whatsapp_business_account") {
+  if (body.object!== "whatsapp_business_account") {
+    console.log("FAIL: Wrong object");
     return Response.json({ status: "ignored" });
   }
 
   // Acknowledge the webhook immediately to prevent retries
   // Process the webhook asynchronously
+  console.log("PASS: Signature and object verified. Processing webhook asynchronously.");
   processWebhook(body);
   return Response.json({ status: "received" });
 }
@@ -98,12 +95,14 @@ async function processWebhook(body: any) {
 
     // Only process actual messages (not status updates)
     if (!value?.messages?.[0]) {
-      return Response.json({ status: "no_message" });
+      console.log("FAIL: No messages (in processWebhook)");
+      return;
     }
 
     const message = value.messages[0];
     const contact = value.contacts?.[0];
 
+    console.log("Type:", message.type, "From:", message.from, "ID:", message.id, "(in processWebhook)");
 
     const phone = message.from;
     const name = contact?.profile?.name || null;
@@ -111,7 +110,7 @@ async function processWebhook(body: any) {
 
     if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
       const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
-      
+
       await supabase.from("conversations").update({
         employment_type: flowData.employment_type,
         income_range: flowData.income_range,
@@ -127,8 +126,9 @@ async function processWebhook(body: any) {
         updated_at: new Date().toISOString()
       }).eq("phone", phone);
 
-      await sendWhatsAppMessage(phone, 
+      await sendWhatsAppMessage(phone,
         `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
+      console.log("PASS: Processing interactive nfm_reply message");
       return;
     }
 
@@ -158,6 +158,7 @@ async function processWebhook(body: any) {
     }
 
     if (message.type === 'text') {
+      console.log("PASS: Processing text message (in processWebhook)");
       const text = message.text.body;
       const hasReferral = !!value.referral;
       const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|start|good)/.test(text.toLowerCase());
@@ -188,14 +189,14 @@ async function processWebhook(body: any) {
       // Human handoff
       if (wantsHuman) {
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
-        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We'll call within 10 minutes.");
+        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We\'ll call within 10 minutes.");
         return;
       }
 
       // Send Flow for new users, ad clicks, greetings, or loan intent
       if (!alreadyQualified && (hasReferral || isGreeting || isLoanIntent)) {
-        await supabase.from("conversations").update({ 
-          last_flow_sent: new Date().toISOString() 
+        await supabase.from("conversations").update({
+          last_flow_sent: new Date().toISOString()
         }).eq("id", conversation.id);
         await sendFlow(phone);
         return;
@@ -238,11 +239,13 @@ async function processWebhook(body: any) {
         .from("conversations")
         .update({ updated_at: new Date().toISOString() })
         .eq("id", conversation.id);
+    } else {
+      console.log("FAIL: Not text or interactive message type handled (in processWebhook)");
+      return; // For other message types not handled
     }
 
-    return Response.json({ status: "replied" });
+    return;
   } catch (error) {
     console.error("Webhook error:", error);
-    // return Response.json({ status: "error" }, { status: 500 }); // Do not return response here
   }
 }
