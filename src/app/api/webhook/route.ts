@@ -144,24 +144,45 @@ async function processWebhook(body: any) {
         console.log("[Webhook] Processing flow reply...");
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
 
-        await supabase.from("conversations").update({
-          employment_type: flowData.employment_type,
-          income_range: flowData.income_range,
-          cibil_range: flowData.cibil_range,
-          loan_type: flowData.loan_type,
-          loan_amount: flowData.loan_amount,
-          city: flowData.city,
-          timeline: flowData.timeline,
-          status: 'qualified',
-          qualified_at: new Date().toISOString(),
-          flow_data: flowData,
-          last_flow_sent: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }).eq("phone", phone);
+        // Fetch conversation to get ID
+        const { data: conv } = await supabase.from("conversations").select("id").eq("phone", phone).single();
 
-        await sendWhatsAppMessage(phone,
-          `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
-        console.log("[Webhook] PASS: Interactive nfm_reply processed");
+        if (conv) {
+          await supabase.from("conversations").update({
+            employment_type: flowData.employment_type,
+            income_range: flowData.income_range,
+            cibil_range: flowData.cibil_range,
+            loan_type: flowData.loan_type,
+            loan_amount: flowData.loan_amount,
+            city: flowData.city,
+            timeline: flowData.timeline,
+            status: 'qualified',
+            qualified_at: new Date().toISOString(),
+            flow_data: flowData,
+            last_flow_sent: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }).eq("id", conv.id);
+
+          // Store the form submission as a message so it appears in the dashboard
+          const summary = `Form Submitted: ${flowData.loan_amount} ${flowData.loan_type} in ${flowData.city} (Income: ${flowData.income_range})`;
+          await supabase.from("messages").insert({
+            conversation_id: conv.id,
+            role: "user",
+            content: summary,
+            whatsapp_msg_id: whatsappMsgId
+          });
+
+          const confirmation = `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`;
+          await sendWhatsAppMessage(phone, confirmation);
+
+          // Store the bot's confirmation message
+          await supabase.from("messages").insert({
+            conversation_id: conv.id,
+            role: "assistant",
+            content: confirmation
+          });
+        }
+        console.log("[Webhook] PASS: Interactive nfm_reply processed and stored");
       } catch (parseError) {
         console.error("[Webhook] FAIL: Error parsing flow JSON:", parseError);
       }
@@ -273,7 +294,8 @@ async function processWebhook(body: any) {
           (history || []).map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
-          }))
+          })),
+          conversation // Pass the conversation context
         );
         
         console.log("[Webhook] Sending AI response...");
@@ -293,7 +315,10 @@ async function processWebhook(body: any) {
         console.log("[Webhook] SUCCESS");
 
       } catch (aiError) {
-         console.error("[Webhook] AI error:", aiError);
+         console.error("[Webhook] AI error after retries:", aiError);
+         // Send a graceful fallback message
+         const fallbackMessage = "I'm sorry, I'm experiencing a bit of high demand right now. Could you please try again in a moment? Or if you'd like, I can connect you to an advisor.";
+         await sendWhatsAppMessage(phone, fallbackMessage);
       }
 
     } else {
