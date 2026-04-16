@@ -10,6 +10,7 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 
 async function sendFlow(to: string) {
   try {
+    console.log(`Sending flow to ${to}...`);
     const response = await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: {
@@ -40,6 +41,8 @@ async function sendFlow(to: string) {
     if (!response.ok) {
       const errorData = await response.text();
       console.error(`FAIL: sendFlow returned status ${response.status}:`, errorData);
+    } else {
+      console.log(`PASS: Flow sent successfully to ${to}`);
     }
   } catch (error) {
     console.error("FAIL: Error executing sendFlow fetch request:", error);
@@ -106,8 +109,6 @@ export async function POST(request: NextRequest) {
     return Response.json({ status: "ignored" });
   }
 
-  // Acknowledge the webhook immediately to prevent retries
-  // Process the webhook asynchronously
   console.log("PASS: Signature and object verified. Processing webhook asynchronously.");
   processWebhook(body);
   return Response.json({ status: "received" });
@@ -119,7 +120,6 @@ async function processWebhook(body: any) {
     const changes = entry?.changes?.[0];
     const value = changes?.value;
 
-    // Only process actual messages (not status updates)
     if (!value?.messages?.[0]) {
       console.log("FAIL: No messages (in processWebhook)");
       return;
@@ -136,6 +136,7 @@ async function processWebhook(body: any) {
 
     if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
       try {
+        console.log("Processing flow reply...");
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
 
         await supabase.from("conversations").update({
@@ -155,26 +156,36 @@ async function processWebhook(body: any) {
 
         await sendWhatsAppMessage(phone,
           `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
-        console.log("PASS: Processing interactive nfm_reply message");
+        console.log("PASS: Processing interactive nfm_reply message completed");
       } catch (parseError) {
         console.error("FAIL: Error parsing flow JSON:", parseError);
       }
       return;
     }
 
-    // Find or create conversation
-    let { data: conversation } = await supabase
+    console.log("Fetching/creating conversation...");
+    let { data: conversation, error: convoError } = await supabase
       .from("conversations")
       .select("*")
       .eq("phone", phone)
       .single();
 
+    if (convoError && convoError.code !== 'PGRST116') {
+      console.error("FAIL: Error fetching conversation:", convoError);
+    }
+
     if (!conversation) {
-      const { data: newConvo } = await supabase
+      console.log("Creating new conversation...");
+      const { data: newConvo, error: insertConvoError } = await supabase
         .from("conversations")
         .insert({ phone, name })
         .select()
         .single();
+        
+      if (insertConvoError) {
+         console.error("FAIL: Error creating conversation:", insertConvoError);
+         return;
+      }
       conversation = newConvo;
     } else if (name && name !== conversation.name) {
       await supabase
@@ -184,7 +195,8 @@ async function processWebhook(body: any) {
     }
 
     if (!conversation) {
-      return; // No response needed since this is fire and forget
+      console.log("FAIL: No conversation available.");
+      return; 
     }
 
     if (message.type === 'text') {
@@ -196,7 +208,9 @@ async function processWebhook(body: any) {
       const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(text.toLowerCase());
       const alreadyQualified = !!conversation.qualified_at;
 
-      // Store user message
+      console.log(`Intent check: isGreeting=${isGreeting}, isLoanIntent=${isLoanIntent}, wantsHuman=${wantsHuman}, alreadyQualified=${alreadyQualified}`);
+
+      console.log("Storing user message...");
       const { error: insertError } = await supabase.from("messages").insert({
         conversation_id: conversation.id,
         role: "user",
@@ -204,32 +218,34 @@ async function processWebhook(body: any) {
         whatsapp_msg_id: whatsappMsgId,
       });
 
-      if (insertError?.code === "23505") {
-        // Duplicate message, ignore
-        return;
+      if (insertError) {
+         if (insertError.code === "23505") {
+            console.log("Duplicate message ignored.");
+            return;
+         } else {
+            console.error("FAIL: Error storing user message:", insertError);
+         }
       }
 
-      // Update conversation timestamp
       await supabase
         .from("conversations")
         .update({ updated_at: new Date().toISOString() })
         .eq("id", conversation.id);
 
-      // Human handoff
       if (wantsHuman) {
+        console.log("User wants human, switching mode...");
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
         await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We\'ll call within 10 minutes.");
         return;
       }
 
-      // If mode is 'human' (and they didn't explicitly ask for a human just now), don't auto-reply
       if (conversation.mode === "human") {
         console.log("PASS: Conversation is in human mode, skipping auto-reply.");
         return;
       }
 
-      // Send Flow for new users, ad clicks, greetings, or loan intent
       if (!alreadyQualified && (hasReferral || isGreeting || isLoanIntent)) {
+        console.log("Sending flow based on intent...");
         await supabase.from("conversations").update({
           last_flow_sent: new Date().toISOString()
         }).eq("id", conversation.id);
@@ -237,44 +253,54 @@ async function processWebhook(body: any) {
         return;
       }
 
-      // Otherwise continue to existing Gemini logic
-      // Fetch conversation history (last 20 messages for context)
-      const { data: history } = await supabase
+      console.log("Fetching history for AI...");
+      const { data: history, error: historyError } = await supabase
         .from("messages")
         .select("role, content")
         .eq("conversation_id", conversation.id)
         .order("created_at", { ascending: true })
         .limit(20);
 
-      // Get AI response
-      const aiResponse = await getAIResponse(
-        (history || []).map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        }))
-      );
+      if (historyError) {
+         console.error("FAIL: Error fetching history:", historyError);
+      }
 
-      // Send response via WhatsApp
-      await sendWhatsAppMessage(phone, aiResponse);
+      console.log("Getting AI response...");
+      try {
+        const aiResponse = await getAIResponse(
+          (history || []).map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }))
+        );
+        console.log("AI Response generated. Sending to WhatsApp...");
 
-      // Store AI response
-      await supabase.from("messages").insert({
-        conversation_id: conversation.id,
-        role: "assistant",
-        content: aiResponse,
-      });
+        await sendWhatsAppMessage(phone, aiResponse);
+        console.log("WhatsApp message sent.");
 
-      // Update conversation timestamp again
-      await supabase
-        .from("conversations")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", conversation.id);
+        console.log("Storing AI response...");
+        await supabase.from("messages").insert({
+          conversation_id: conversation.id,
+          role: "assistant",
+          content: aiResponse,
+        });
+
+        await supabase
+          .from("conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", conversation.id);
+          
+        console.log("SUCCESS: Webhook processing complete.");
+
+      } catch (aiError) {
+         console.error("FAIL: Error getting or sending AI response:", aiError);
+      }
+
     } else {
       console.log("FAIL: Not text or interactive message type handled (in processWebhook)");
-      return; // For other message types not handled
+      return;
     }
 
-    return;
   } catch (error) {
     console.error("Webhook error:", error);
   }
