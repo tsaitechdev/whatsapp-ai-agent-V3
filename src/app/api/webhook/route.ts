@@ -4,14 +4,19 @@ import { supabase } from "@/lib/supabase";
 import { sendWhatsAppMessage } from "@/lib/whatsapp";
 import { getAIResponse } from "@/lib/ai";
 
-const PHONE_NUMBER_ID = "275705968959951";
+const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const FLOW_ID = "1084065951453992";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 
 async function sendFlow(to: string) {
+  if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
+    console.error("[sendFlow] FAIL: Missing configuration (PHONE_NUMBER_ID or WHATSAPP_TOKEN)");
+    return;
+  }
+
   try {
-    console.log(`Sending flow to ${to}...`);
-    const response = await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+    console.log(`[sendFlow] Sending flow to ${to}...`);
+    const response = await fetch(`https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
@@ -38,14 +43,14 @@ async function sendFlow(to: string) {
       })
     });
 
+    const responseText = await response.text();
     if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`FAIL: sendFlow returned status ${response.status}:`, errorData);
+      console.error(`[sendFlow] FAIL: Status ${response.status}:`, responseText);
     } else {
-      console.log(`PASS: Flow sent successfully to ${to}`);
+      console.log(`[sendFlow] PASS: Flow sent to ${to}`);
     }
   } catch (error) {
-    console.error("FAIL: Error executing sendFlow fetch request:", error);
+    console.error("[sendFlow] FAIL: Fetch error:", error);
   }
 }
 
@@ -109,8 +114,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ status: "ignored" });
   }
 
-  console.log("PASS: Signature and object verified. Processing webhook asynchronously.");
-  processWebhook(body);
+  console.log("PASS: Signature and object verified. Processing webhook.");
+  await processWebhook(body);
   return Response.json({ status: "received" });
 }
 
@@ -121,14 +126,14 @@ async function processWebhook(body: any) {
     const value = changes?.value;
 
     if (!value?.messages?.[0]) {
-      console.log("FAIL: No messages (in processWebhook)");
+      console.log("SKIP: No messages in webhook payload");
       return;
     }
 
     const message = value.messages[0];
     const contact = value.contacts?.[0];
 
-    console.log("Type:", message.type, "From:", message.from, "ID:", message.id, "(in processWebhook)");
+    console.log(`[Webhook] Type: ${message.type}, From: ${message.from}, ID: ${message.id}`);
 
     const phone = message.from;
     const name = contact?.profile?.name || null;
@@ -136,7 +141,7 @@ async function processWebhook(body: any) {
 
     if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
       try {
-        console.log("Processing flow reply...");
+        console.log("[Webhook] Processing flow reply...");
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
 
         await supabase.from("conversations").update({
@@ -156,14 +161,14 @@ async function processWebhook(body: any) {
 
         await sendWhatsAppMessage(phone,
           `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`);
-        console.log("PASS: Processing interactive nfm_reply message completed");
+        console.log("[Webhook] PASS: Interactive nfm_reply processed");
       } catch (parseError) {
-        console.error("FAIL: Error parsing flow JSON:", parseError);
+        console.error("[Webhook] FAIL: Error parsing flow JSON:", parseError);
       }
       return;
     }
 
-    console.log("Fetching/creating conversation...");
+    console.log("[Webhook] Fetching/creating conversation...");
     let { data: conversation, error: convoError } = await supabase
       .from("conversations")
       .select("*")
@@ -171,11 +176,11 @@ async function processWebhook(body: any) {
       .single();
 
     if (convoError && convoError.code !== 'PGRST116') {
-      console.error("FAIL: Error fetching conversation:", convoError);
+      console.error("[Webhook] FAIL: Error fetching conversation:", convoError);
     }
 
     if (!conversation) {
-      console.log("Creating new conversation...");
+      console.log("[Webhook] Creating new conversation...");
       const { data: newConvo, error: insertConvoError } = await supabase
         .from("conversations")
         .insert({ phone, name })
@@ -183,7 +188,7 @@ async function processWebhook(body: any) {
         .single();
         
       if (insertConvoError) {
-         console.error("FAIL: Error creating conversation:", insertConvoError);
+         console.error("[Webhook] FAIL: Error creating conversation:", insertConvoError);
          return;
       }
       conversation = newConvo;
@@ -195,12 +200,12 @@ async function processWebhook(body: any) {
     }
 
     if (!conversation) {
-      console.log("FAIL: No conversation available.");
+      console.log("[Webhook] FAIL: No conversation available.");
       return; 
     }
 
     if (message.type === 'text') {
-      console.log("PASS: Processing text message (in processWebhook)");
+      console.log("[Webhook] Processing text message");
       const text = message.text.body;
       const hasReferral = !!value.referral;
       const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|start|good)/.test(text.toLowerCase());
@@ -208,9 +213,9 @@ async function processWebhook(body: any) {
       const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(text.toLowerCase());
       const alreadyQualified = !!conversation.qualified_at;
 
-      console.log(`Intent check: isGreeting=${isGreeting}, isLoanIntent=${isLoanIntent}, wantsHuman=${wantsHuman}, alreadyQualified=${alreadyQualified}`);
+      console.log(`[Webhook] Intent check: greeting=${isGreeting}, loan=${isLoanIntent}, human=${wantsHuman}, qual=${alreadyQualified}`);
 
-      console.log("Storing user message...");
+      console.log("[Webhook] Storing user message...");
       const { error: insertError } = await supabase.from("messages").insert({
         conversation_id: conversation.id,
         role: "user",
@@ -220,10 +225,10 @@ async function processWebhook(body: any) {
 
       if (insertError) {
          if (insertError.code === "23505") {
-            console.log("Duplicate message ignored.");
+            console.log("[Webhook] Duplicate message ignored.");
             return;
          } else {
-            console.error("FAIL: Error storing user message:", insertError);
+            console.error("[Webhook] FAIL: Error storing user message:", insertError);
          }
       }
 
@@ -233,19 +238,19 @@ async function processWebhook(body: any) {
         .eq("id", conversation.id);
 
       if (wantsHuman) {
-        console.log("User wants human, switching mode...");
+        console.log("[Webhook] User wants human mode");
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
         await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We\'ll call within 10 minutes.");
         return;
       }
 
       if (conversation.mode === "human") {
-        console.log("PASS: Conversation is in human mode, skipping auto-reply.");
+        console.log("[Webhook] Human mode active, skipping AI");
         return;
       }
 
       if (!alreadyQualified && (hasReferral || isGreeting || isLoanIntent)) {
-        console.log("Sending flow based on intent...");
+        console.log("[Webhook] Triggering flow...");
         await supabase.from("conversations").update({
           last_flow_sent: new Date().toISOString()
         }).eq("id", conversation.id);
@@ -253,32 +258,27 @@ async function processWebhook(body: any) {
         return;
       }
 
-      console.log("Fetching history for AI...");
-      const { data: history, error: historyError } = await supabase
-        .from("messages")
-        .select("role, content")
-        .eq("conversation_id", conversation.id)
-        .order("created_at", { ascending: true })
-        .limit(20);
-
-      if (historyError) {
-         console.error("FAIL: Error fetching history:", historyError);
-      }
-
-      console.log("Getting AI response...");
+      console.log("[Webhook] Getting AI response...");
       try {
+        const { data: history, error: historyError } = await supabase
+          .from("messages")
+          .select("role, content")
+          .eq("conversation_id", conversation.id)
+          .order("created_at", { ascending: true })
+          .limit(20);
+
+        if (historyError) console.error("[Webhook] History fetch error:", historyError);
+
         const aiResponse = await getAIResponse(
           (history || []).map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           }))
         );
-        console.log("AI Response generated. Sending to WhatsApp...");
-
+        
+        console.log("[Webhook] Sending AI response...");
         await sendWhatsAppMessage(phone, aiResponse);
-        console.log("WhatsApp message sent.");
 
-        console.log("Storing AI response...");
         await supabase.from("messages").insert({
           conversation_id: conversation.id,
           role: "assistant",
@@ -290,18 +290,18 @@ async function processWebhook(body: any) {
           .update({ updated_at: new Date().toISOString() })
           .eq("id", conversation.id);
           
-        console.log("SUCCESS: Webhook processing complete.");
+        console.log("[Webhook] SUCCESS");
 
       } catch (aiError) {
-         console.error("FAIL: Error getting or sending AI response:", aiError);
+         console.error("[Webhook] AI error:", aiError);
       }
 
     } else {
-      console.log("FAIL: Not text or interactive message type handled (in processWebhook)");
+      console.log(`[Webhook] Unhandled message type: ${message.type}`);
       return;
     }
 
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error("[Webhook] Critical error:", error);
   }
 }
