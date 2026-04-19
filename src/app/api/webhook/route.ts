@@ -11,12 +11,14 @@ const FLOW_ID = "1084065951453992";
 const KEY_MAP: Record<string, string> = {
   "10_20": "10-20 Lakhs",
   "5_10": "5-10 Lakhs",
+  "3_5": "3-5 Lakhs",
   "below5": "Below 5 Lakhs",
   "above20": "Above 20 Lakhs",
   "bt": "Balance Transfer",
   "pl": "Personal Loan",
   "hl": "Home Loan",
   "lap": "Loan Against Property",
+  "topup": "Top-up Loan",
   "salaried": "Salaried",
   "self_employed": "Self Employed",
   "above100": "100k+",
@@ -232,7 +234,6 @@ async function processWebhook(body: any) {
           loan_amount: flowData.loan_amount || flowData.amount,
           city: flowData.city,
           timeline: flowData.timeline,
-          status: 'qualified',
           qualified_at: new Date().toISOString(),
           flow_data: flowData,
           updated_at: new Date().toISOString()
@@ -356,7 +357,6 @@ async function processWebhook(body: any) {
           loan_type: null,
           city: null,
           qualified_at: null,
-          status: 'active',
           mode: 'ai',
           last_flow_sent: new Date().toISOString(),
           updated_at: new Date().toISOString()
