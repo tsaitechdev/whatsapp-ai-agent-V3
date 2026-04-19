@@ -22,6 +22,33 @@ CRITICAL: Never promise 100% approval. Reiterate that approval depends on bank c
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash"});
 
+const KEY_MAP: Record<string, string> = {
+  "10_20": "10-20 Lakhs",
+  "5_10": "5-10 Lakhs",
+  "below5": "Below 5 Lakhs",
+  "above20": "Above 20 Lakhs",
+  "bt": "Balance Transfer",
+  "pl": "Personal Loan",
+  "hl": "Home Loan",
+  "lap": "Loan Against Property",
+  "salaried": "Salaried",
+  "self_employed": "Self Employed",
+  "above100": "100k+",
+  "50_100": "50k-100k",
+  "25_50": "25k-50k",
+  "below25": "Below 25k",
+  "750_plus": "750+",
+  "700_750": "700-750",
+  "650_700": "650-700",
+  "below650": "Below 650",
+};
+
+function formatValue(val: any): string {
+  if (val === undefined || val === null) return "N/A";
+  const str = String(val).toLowerCase();
+  return KEY_MAP[str] || String(val);
+}
+
 export async function getAIResponse(
   messages: { role: "user" | "assistant"; content: string }[],
   conversation?: any
@@ -30,11 +57,11 @@ export async function getAIResponse(
 
   if (conversation) {
     const details = [];
-    if (conversation.income_range) details.push(`Income: ${conversation.income_range}`);
-    if (conversation.employment_type) details.push(`Employment: ${conversation.employment_type}`);
-    if (conversation.cibil_range) details.push(`CIBIL: ${conversation.cibil_range}`);
-    if (conversation.loan_amount) details.push(`Loan Amount: ${conversation.loan_amount}`);
-    if (conversation.loan_type) details.push(`Loan Type: ${conversation.loan_type}`);
+    if (conversation.income_range) details.push(`Income: ${formatValue(conversation.income_range)}`);
+    if (conversation.employment_type) details.push(`Employment: ${formatValue(conversation.employment_type)}`);
+    if (conversation.cibil_range) details.push(`CIBIL: ${formatValue(conversation.cibil_range)}`);
+    if (conversation.loan_amount) details.push(`Loan Amount: ${formatValue(conversation.loan_amount)}`);
+    if (conversation.loan_type) details.push(`Loan Type: ${formatValue(conversation.loan_type)}`);
     if (conversation.city) details.push(`City: ${conversation.city}`);
 
     if (details.length > 0) {

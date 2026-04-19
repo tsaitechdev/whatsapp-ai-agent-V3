@@ -8,6 +8,33 @@ const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const FLOW_ID = "1084065951453992";
 
+const KEY_MAP: Record<string, string> = {
+  "10_20": "10-20 Lakhs",
+  "5_10": "5-10 Lakhs",
+  "below5": "Below 5 Lakhs",
+  "above20": "Above 20 Lakhs",
+  "bt": "Balance Transfer",
+  "pl": "Personal Loan",
+  "hl": "Home Loan",
+  "lap": "Loan Against Property",
+  "salaried": "Salaried",
+  "self_employed": "Self Employed",
+  "above100": "100k+",
+  "50_100": "50k-100k",
+  "25_50": "25k-50k",
+  "below25": "Below 25k",
+  "750_plus": "750+",
+  "700_750": "700-750",
+  "650_700": "650-700",
+  "below650": "Below 650",
+};
+
+function formatValue(val: any): string {
+  if (val === undefined || val === null) return "N/A";
+  const str = String(val).toLowerCase();
+  return KEY_MAP[str] || String(val);
+}
+
 async function sendFlow(to: string) {
   if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
     console.error("[sendFlow] FAIL: Missing configuration (PHONE_NUMBER_ID or WHATSAPP_TOKEN)");
@@ -218,10 +245,10 @@ async function processWebhook(body: any) {
         }
 
         // Store the form submission summary for the dashboard
-        const amount = flowData.loan_amount || flowData.amount || "N/A";
-        const type = flowData.loan_type || flowData.type || "Loan";
+        const amount = formatValue(flowData.loan_amount || flowData.amount);
+        const type = formatValue(flowData.loan_type || flowData.type);
         const city = flowData.city || "N/A";
-        const income = flowData.income_range || flowData.income || "N/A";
+        const income = formatValue(flowData.income_range || flowData.income);
 
         const summary = `Form Submitted: ${amount} ${type} in ${city} (Income: ${income})`;
         await supabase.from("messages").insert({
@@ -260,7 +287,7 @@ async function processWebhook(body: any) {
       const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(lowerText);
 
       // Reset alreadyQualified check by fetching the latest state
-      const { data: latestConvo } = await supabase.from("conversations").select("qualified_at, mode").eq("id", conversation.id).single();
+      const { data: latestConvo } = await supabase.from("conversations").select("qualified_at, mode, updated_at, income_range, employment_type, cibil_range, loan_amount, loan_type, city").eq("id", conversation.id).single();
       const isActuallyQualified = !!latestConvo?.qualified_at;
 
       console.log(`[Webhook] State: qual=${isActuallyQualified}, mode=${latestConvo?.mode}, text="${text}"`);
@@ -315,13 +342,26 @@ async function processWebhook(body: any) {
         return;
       }
 
-      // Trigger flow if not qualified AND it's a greeting/start/loan intent
-      // BUT don't trigger if it's just a general question and they are already somewhat engaged
-      if (!isActuallyQualified && (hasReferral || isGreeting || isStart)) {
-        console.log("[Webhook] Triggering flow...");
+      // Trigger flow if not qualified OR if it's a greeting/start/loan intent and the previous data is old
+      const lastUpdate = new Date(latestConvo?.updated_at || 0).getTime();
+      const isOldSession = Date.now() - lastUpdate > 12 * 60 * 60 * 1000; // 12 hours
+
+      if ((!isActuallyQualified || isOldSession) && (hasReferral || isGreeting || isStart)) {
+        console.log("[Webhook] Triggering flow and resetting lead data...");
         await supabase.from("conversations").update({
-          last_flow_sent: new Date().toISOString()
+          income_range: null,
+          employment_type: null,
+          cibil_range: null,
+          loan_amount: null,
+          loan_type: null,
+          city: null,
+          qualified_at: null,
+          status: 'active',
+          mode: 'ai',
+          last_flow_sent: new Date().toISOString(),
+          updated_at: new Date().toISOString()
         }).eq("id", conversation.id);
+        
         await sendFlow(phone);
         return;
       }
