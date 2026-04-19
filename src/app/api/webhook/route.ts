@@ -139,56 +139,7 @@ async function processWebhook(body: any) {
     const name = contact?.profile?.name || null;
     const whatsappMsgId = message.id;
 
-    if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
-      try {
-        console.log("[Webhook] Processing flow reply...");
-        const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
-
-        // Fetch conversation to get ID
-        const { data: conv } = await supabase.from("conversations").select("id").eq("phone", phone).single();
-
-        if (conv) {
-          await supabase.from("conversations").update({
-            employment_type: flowData.employment_type,
-            income_range: flowData.income_range,
-            cibil_range: flowData.cibil_range,
-            loan_type: flowData.loan_type,
-            loan_amount: flowData.loan_amount,
-            city: flowData.city,
-            timeline: flowData.timeline,
-            status: 'qualified',
-            qualified_at: new Date().toISOString(),
-            flow_data: flowData,
-            last_flow_sent: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }).eq("id", conv.id);
-
-          // Store the form submission as a message so it appears in the dashboard
-          const summary = `Form Submitted: ${flowData.loan_amount} ${flowData.loan_type} in ${flowData.city} (Income: ${flowData.income_range})`;
-          await supabase.from("messages").insert({
-            conversation_id: conv.id,
-            role: "user",
-            content: summary,
-            whatsapp_msg_id: whatsappMsgId
-          });
-
-          const confirmation = `Thanks! We received your ${flowData.loan_amount} ${flowData.loan_type} request for ${flowData.city}. Our advisor will call within 2 hours.`;
-          await sendWhatsAppMessage(phone, confirmation);
-
-          // Store the bot's confirmation message
-          await supabase.from("messages").insert({
-            conversation_id: conv.id,
-            role: "assistant",
-            content: confirmation
-          });
-        }
-        console.log("[Webhook] PASS: Interactive nfm_reply processed and stored");
-      } catch (parseError) {
-        console.error("[Webhook] FAIL: Error parsing flow JSON:", parseError);
-      }
-      return;
-    }
-
+    // 1. Fetch or create conversation first so it's available for all message types
     console.log("[Webhook] Fetching/creating conversation...");
     let { data: conversation, error: convoError } = await supabase
       .from("conversations")
@@ -225,6 +176,65 @@ async function processWebhook(body: any) {
       return; 
     }
 
+    // 2. Handle Flow Reply (nfm_reply)
+    if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
+      try {
+        console.log("[Webhook] Processing flow reply...");
+        const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
+        console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
+
+        console.log(`[Webhook] Updating conversation ${conversation.id} with flow data...`);
+        const { error: updateError } = await supabase.from("conversations").update({
+          employment_type: flowData.employment_type || flowData.employment,
+          income_range: flowData.income_range || flowData.income,
+          cibil_range: flowData.cibil_range || flowData.cibil,
+          loan_type: flowData.loan_type || flowData.type,
+          loan_amount: flowData.loan_amount || flowData.amount,
+          city: flowData.city,
+          timeline: flowData.timeline,
+          status: 'qualified',
+          qualified_at: new Date().toISOString(),
+          flow_data: flowData,
+          updated_at: new Date().toISOString()
+        }).eq("id", conversation.id);
+
+        if (updateError) {
+          console.error("[Webhook] FAIL: Error updating conversation with flow data:", updateError);
+        } else {
+          console.log("[Webhook] PASS: Conversation updated with flow data");
+        }
+
+        // Store the form submission summary for the dashboard
+        const amount = flowData.loan_amount || flowData.amount || "N/A";
+        const type = flowData.loan_type || flowData.type || "Loan";
+        const city = flowData.city || "N/A";
+        const income = flowData.income_range || flowData.income || "N/A";
+
+        const summary = `Form Submitted: ${amount} ${type} in ${city} (Income: ${income})`;
+        await supabase.from("messages").insert({
+          conversation_id: conversation.id,
+          role: "user",
+          content: summary,
+          whatsapp_msg_id: whatsappMsgId
+        });
+
+        const confirmation = `Thanks! We've received your ${amount} ${type} request for ${city}. An advisor from Team Finjoat will call you within 2 hours.`;
+        await sendWhatsAppMessage(phone, confirmation);
+
+        await supabase.from("messages").insert({
+          conversation_id: conversation.id,
+          role: "assistant",
+          content: confirmation
+        });
+
+        console.log("[Webhook] PASS: Interactive nfm_reply processing complete");
+      } catch (parseError) {
+        console.error("[Webhook] FAIL: Error parsing flow JSON:", parseError);
+      }
+      return;
+    }
+
+    // 3. Handle Text Message
     if (message.type === 'text') {
       console.log("[Webhook] Processing text message");
       const text = message.text.body;
@@ -235,6 +245,10 @@ async function processWebhook(body: any) {
       const alreadyQualified = !!conversation.qualified_at;
 
       console.log(`[Webhook] Intent check: greeting=${isGreeting}, loan=${isLoanIntent}, human=${wantsHuman}, qual=${alreadyQualified}`);
+
+      // Reset alreadyQualified check by fetching the latest state (in case it changed during processing)
+      const { data: latestConvo } = await supabase.from("conversations").select("qualified_at").eq("id", conversation.id).single();
+      const isActuallyQualified = !!latestConvo?.qualified_at;
 
       console.log("[Webhook] Storing user message...");
       const { error: insertError } = await supabase.from("messages").insert({
@@ -261,7 +275,7 @@ async function processWebhook(body: any) {
       if (wantsHuman) {
         console.log("[Webhook] User wants human mode");
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
-        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor. We\'ll call within 10 minutes.");
+        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor from Team Finjoat. We\'ll call within 10 minutes.");
         return;
       }
 
@@ -270,7 +284,7 @@ async function processWebhook(body: any) {
         return;
       }
 
-      if (!alreadyQualified && (hasReferral || isGreeting || isLoanIntent)) {
+      if (!isActuallyQualified && (hasReferral || isGreeting || isLoanIntent)) {
         console.log("[Webhook] Triggering flow...");
         await supabase.from("conversations").update({
           last_flow_sent: new Date().toISOString()
