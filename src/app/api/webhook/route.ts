@@ -180,6 +180,19 @@ async function processWebhook(body: any) {
     if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
       try {
         console.log("[Webhook] Processing flow reply...");
+        
+        // Check for duplicate processing of the same message ID
+        const { data: existingMsg } = await supabase
+          .from("messages")
+          .select("id")
+          .eq("whatsapp_msg_id", whatsappMsgId)
+          .single();
+        
+        if (existingMsg) {
+          console.log("[Webhook] Duplicate flow reply ignored.");
+          return;
+        }
+
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
         console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
 
@@ -239,16 +252,18 @@ async function processWebhook(body: any) {
       console.log("[Webhook] Processing text message");
       const text = message.text.body;
       const hasReferral = !!value.referral;
-      const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|start|good)/.test(text.toLowerCase());
-      const isLoanIntent = /(loan|eligib|check|apply|cibil|personal|fund|paisa|amount|lakh)/.test(text.toLowerCase());
-      const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(text.toLowerCase());
-      const alreadyQualified = !!conversation.qualified_at;
+      const lowerText = text.toLowerCase();
+      
+      const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|good|morning|afternoon|evening)/.test(lowerText);
+      const isStart = /^(start|apply|check|loan|eligib)/.test(lowerText);
+      const isLoanIntent = /(loan|eligib|check|apply|cibil|personal|fund|paisa|amount|lakh)/.test(lowerText);
+      const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(lowerText);
 
-      console.log(`[Webhook] Intent check: greeting=${isGreeting}, loan=${isLoanIntent}, human=${wantsHuman}, qual=${alreadyQualified}`);
-
-      // Reset alreadyQualified check by fetching the latest state (in case it changed during processing)
-      const { data: latestConvo } = await supabase.from("conversations").select("qualified_at").eq("id", conversation.id).single();
+      // Reset alreadyQualified check by fetching the latest state
+      const { data: latestConvo } = await supabase.from("conversations").select("qualified_at, mode").eq("id", conversation.id).single();
       const isActuallyQualified = !!latestConvo?.qualified_at;
+
+      console.log(`[Webhook] State: qual=${isActuallyQualified}, mode=${latestConvo?.mode}, text="${text}"`);
 
       console.log("[Webhook] Storing user message...");
       const { error: insertError } = await supabase.from("messages").insert({
@@ -260,11 +275,27 @@ async function processWebhook(body: any) {
 
       if (insertError) {
          if (insertError.code === "23505") {
-            console.log("[Webhook] Duplicate message ignored.");
+            console.log("[Webhook] Duplicate message ID ignored.");
             return;
          } else {
             console.error("[Webhook] FAIL: Error storing user message:", insertError);
          }
+      }
+
+      // Check if we already responded to this EXACT message content recently to prevent duplicates from different message IDs
+      const { data: recentMsg } = await supabase
+        .from("messages")
+        .select("id")
+        .eq("conversation_id", conversation.id)
+        .eq("content", text)
+        .eq("role", "user")
+        .neq("whatsapp_msg_id", whatsappMsgId)
+        .gt("created_at", new Date(Date.now() - 5000).toISOString())
+        .limit(1);
+
+      if (recentMsg && recentMsg.length > 0) {
+        console.log("[Webhook] Duplicate message content within 5s ignored.");
+        return;
       }
 
       await supabase
@@ -275,16 +306,18 @@ async function processWebhook(body: any) {
       if (wantsHuman) {
         console.log("[Webhook] User wants human mode");
         await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
-        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor from Team Finjoat. We\'ll call within 10 minutes.");
+        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor from Team Finjoat. We'll call within 10 minutes.");
         return;
       }
 
-      if (conversation.mode === "human") {
+      if (latestConvo?.mode === "human") {
         console.log("[Webhook] Human mode active, skipping AI");
         return;
       }
 
-      if (!isActuallyQualified && (hasReferral || isGreeting || isLoanIntent)) {
+      // Trigger flow if not qualified AND it's a greeting/start/loan intent
+      // BUT don't trigger if it's just a general question and they are already somewhat engaged
+      if (!isActuallyQualified && (hasReferral || isGreeting || isStart)) {
         console.log("[Webhook] Triggering flow...");
         await supabase.from("conversations").update({
           last_flow_sent: new Date().toISOString()
@@ -309,7 +342,7 @@ async function processWebhook(body: any) {
             role: m.role as "user" | "assistant",
             content: m.content,
           })),
-          conversation // Pass the conversation context
+          latestConvo // Pass the latest conversation context
         );
         
         console.log("[Webhook] Sending AI response...");
@@ -329,9 +362,8 @@ async function processWebhook(body: any) {
         console.log("[Webhook] SUCCESS");
 
       } catch (aiError) {
-         console.error("[Webhook] AI error after retries:", aiError);
-         // Send a graceful fallback message
-         const fallbackMessage = "I'm sorry, I'm experiencing a bit of high demand right now. Could you please try again in a moment? Or if you'd like, I can connect you to an advisor.";
+         console.error("[Webhook] AI error:", aiError);
+         const fallbackMessage = "I'm sorry, I'm experiencing a bit of high demand. Could you please try again? Or I can connect you to an advisor.";
          await sendWhatsAppMessage(phone, fallbackMessage);
       }
 
