@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import crypto from "crypto";
 import { supabase } from "@/lib/supabase";
-import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import { sendWhatsAppMessage, sendWhatsAppDocument } from "@/lib/whatsapp";
 import { getAIResponse } from "@/lib/ai";
 
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -143,12 +143,13 @@ export async function POST(request: NextRequest) {
     return Response.json({ status: "ignored" });
   }
 
+  const host = request.headers.get("host") || "";
   console.log("PASS: Signature and object verified. Processing webhook.");
-  await processWebhook(body);
+  await processWebhook(body, host);
   return Response.json({ status: "received" });
 }
 
-async function processWebhook(body: any) {
+async function processWebhook(body: any, host: string = "") {
   try {
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
@@ -273,6 +274,11 @@ async function processWebhook(body: any) {
 
         const confirmation = `Thanks! We've received your ${amount} ${type} request for ${city}. An advisor from Team Finjoat will call you within 2 hours.`;
         await sendWhatsAppMessage(phone, confirmation);
+
+        // Send CIBIL guide PDF
+        const pdfUrl = `https://${host}/cibil-guide.pdf`;
+        console.log(`[Webhook] Sending CIBIL guide PDF: ${pdfUrl}`);
+        await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
 
         await supabase.from("messages").insert({
           conversation_id: conversation.id,

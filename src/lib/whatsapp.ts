@@ -21,3 +21,31 @@ export async function sendWhatsAppMessage(to: string, body: string) {
   }
   return data;
 }
+
+export async function sendWhatsAppDocument(to: string, link: string, filename: string, caption?: string) {
+  const res = await fetch(
+    `https://graph.facebook.com/v22.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "document",
+        document: {
+          link,
+          filename,
+          caption
+        },
+      }),
+    }
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("WhatsApp API document error:", data);
+  }
+  return data;
+}
