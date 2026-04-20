@@ -144,7 +144,11 @@ export async function POST(request: NextRequest) {
   }
 
   console.log("PASS: Signature and object verified. Processing webhook.");
-  await processWebhook(body);
+  
+  // Use fire-and-forget for processing to respond to Meta immediately and prevent retries
+  // We don't await processWebhook here.
+  processWebhook(body).catch(err => console.error("[Webhook] Background processing error:", err));
+  
   return Response.json({ status: "received" });
 }
 
@@ -339,7 +343,11 @@ async function processWebhook(body: any) {
       }
 
       if (latestConvo?.mode === "human") {
-        console.log("[Webhook] Human mode active, skipping AI");
+        console.log("[Webhook] Human mode active, sending auto-reply...");
+        const isQuery = /(where|are you|hello|hi|advisor|talk|call|when)/.test(lowerText);
+        if (isQuery) {
+          await sendWhatsAppMessage(phone, "Our advisor is reviewing your details and will connect with you shortly. Thank you for your patience!");
+        }
         return;
       }
 
@@ -356,6 +364,8 @@ async function processWebhook(body: any) {
           loan_amount: null,
           loan_type: null,
           city: null,
+          timeline: null,
+          flow_data: null,
           qualified_at: null,
           mode: 'ai',
           last_flow_sent: new Date().toISOString(),
