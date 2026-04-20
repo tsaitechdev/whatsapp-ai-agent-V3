@@ -144,11 +144,7 @@ export async function POST(request: NextRequest) {
   }
 
   console.log("PASS: Signature and object verified. Processing webhook.");
-  
-  // Use fire-and-forget for processing to respond to Meta immediately and prevent retries
-  // We don't await processWebhook here.
-  processWebhook(body).catch(err => console.error("[Webhook] Background processing error:", err));
-  
+  await processWebhook(body);
   return Response.json({ status: "received" });
 }
 
@@ -166,11 +162,23 @@ async function processWebhook(body: any) {
     const message = value.messages[0];
     const contact = value.contacts?.[0];
 
-    console.log(`[Webhook] Type: ${message.type}, From: ${message.from}, ID: ${message.id}`);
-
     const phone = message.from;
     const name = contact?.profile?.name || null;
     const whatsappMsgId = message.id;
+
+    console.log(`[Webhook] Type: ${message.type}, From: ${phone}, ID: ${whatsappMsgId}`);
+
+    // Early duplicate check to prevent concurrent processing of retries
+    const { data: existingMsg } = await supabase
+      .from("messages")
+      .select("id")
+      .eq("whatsapp_msg_id", whatsappMsgId)
+      .maybeSingle();
+    
+    if (existingMsg) {
+      console.log(`[Webhook] Duplicate message ID ${whatsappMsgId} ignored.`);
+      return;
+    }
 
     // 1. Fetch or create conversation first so it's available for all message types
     console.log("[Webhook] Fetching/creating conversation...");
@@ -289,7 +297,6 @@ async function processWebhook(body: any) {
       const isGreeting = /^(hi|hello|hey|namaste|hii|helo|hlo|good|morning|afternoon|evening)/.test(lowerText);
       const isStart = /^(start|apply|check|loan|eligib)/.test(lowerText);
       const isLoanIntent = /(loan|eligib|check|apply|cibil|personal|fund|paisa|amount|lakh)/.test(lowerText);
-      const wantsHuman = /(agent|human|talk|call|executive|person|baat kar)/.test(lowerText);
 
       // Reset alreadyQualified check by fetching the latest state
       const { data: latestConvo } = await supabase.from("conversations").select("qualified_at, mode, updated_at, income_range, employment_type, cibil_range, loan_amount, loan_type, city").eq("id", conversation.id).single();
@@ -335,13 +342,6 @@ async function processWebhook(body: any) {
         .update({ updated_at: new Date().toISOString() })
         .eq("id", conversation.id);
 
-      if (wantsHuman) {
-        console.log("[Webhook] User wants human mode");
-        await supabase.from("conversations").update({ mode: 'human' }).eq("id", conversation.id);
-        await sendWhatsAppMessage(phone, "Sure, connecting you to our advisor from Team Finjoat. We'll call within 10 minutes.");
-        return;
-      }
-
       if (latestConvo?.mode === "human") {
         console.log("[Webhook] Human mode active, sending auto-reply...");
         const isQuery = /(where|are you|hello|hi|advisor|talk|call|when)/.test(lowerText);
@@ -351,7 +351,6 @@ async function processWebhook(body: any) {
         return;
       }
 
-      // Trigger flow if not qualified OR if it's a greeting/start/loan intent and the previous data is old
       const lastUpdate = new Date(latestConvo?.updated_at || 0).getTime();
       const isOldSession = Date.now() - lastUpdate > 12 * 60 * 60 * 1000; // 12 hours
 
