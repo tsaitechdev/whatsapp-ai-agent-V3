@@ -42,6 +42,7 @@ const KEY_MAP: Record<string, string> = {
   "700_750": "700-750",
   "650_700": "650-700",
   "below650": "Below 650",
+  "unknown": "Not Sure",
   "immediate": "Immediate",
   "3days": "Within 3 Days",
   "7days": "Within 7 Days",
@@ -73,10 +74,17 @@ export async function getAIResponse(
     }
   }
 
-  const history = messages.slice(0, -1).map(msg => ({
+  const rawHistory = messages.slice(0, -1).map(msg => ({
     role: msg.role === "user" ? "user" : "model",
     parts: [{ text: msg.content }],
   }));
+
+  // Google Generative AI requires history to start with 'user' role.
+  // If the first message is from 'model', we must remove it.
+  let history = rawHistory;
+  while (history.length > 0 && history[0].role !== "user") {
+    history.shift();
+  }
 
   const lastUserMessage = messages[messages.length - 1].content;
 

@@ -281,7 +281,6 @@ export default function Dashboard() {
           </div>
         ) : (
           <>
-          <>
             {/* Chat Header */}
             <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between" style={{ background: "#141414" }}>
               <div className="flex items-center gap-3">
@@ -454,7 +453,6 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-          </>
           </>
         )}
       </div>

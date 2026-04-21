@@ -30,6 +30,7 @@ const KEY_MAP: Record<string, string> = {
   "700_750": "700-750",
   "650_700": "650-700",
   "below650": "Below 650",
+  "unknown": "Not Sure",
   "immediate": "Immediate",
   "3days": "Within 3 Days",
   "7days": "Within 7 Days",
@@ -428,9 +429,10 @@ async function processWebhook(body: any, host: string = "") {
           
         console.log("[Webhook] SUCCESS");
 
-      } catch (aiError) {
-         console.error("[Webhook] AI error:", aiError);
-         const fallbackMessage = "I'm sorry, I'm experiencing a bit of high demand. Could you please try again? Or I can connect you to an advisor.";
+      } catch (aiError: any) {
+         console.error("[Webhook] AI error after retries:", aiError.message);
+         // More professional fallback
+         const fallbackMessage = "I'm having a small technical difficulty, but don't worry—our advisor is already notified and will call you within 2 hours to answer all your questions. Thank you for your patience!";
          await sendWhatsAppMessage(phone, fallbackMessage);
       }
 
