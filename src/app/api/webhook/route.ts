@@ -21,6 +21,7 @@ const KEY_MAP: Record<string, string> = {
   "topup": "Top-up Loan",
   "salaried": "Salaried",
   "self_employed": "Self Employed",
+  "sep": "Self Employed Prof.",
   "above100": "100k+",
   "50_100": "50k-100k",
   "25_50": "25k-50k",
@@ -29,6 +30,9 @@ const KEY_MAP: Record<string, string> = {
   "700_750": "700-750",
   "650_700": "650-700",
   "below650": "Below 650",
+  "immediate": "Immediate",
+  "3days": "Within 3 Days",
+  "7days": "Within 7 Days",
 };
 
 function formatValue(val: any): string {
@@ -277,7 +281,7 @@ async function processWebhook(body: any, host: string = "") {
           whatsapp_msg_id: whatsappMsgId
         });
 
-        const confirmation = `Thanks! We've received your ${amount} ${type} request for ${city}. An advisor from Team Finjoat will call you within 2 hours.`;
+        const confirmation = `Thanks! We've received your ${amount} ${type} request. An advisor from Team Finjoat will call you within 2 hours.`;
         await sendWhatsAppMessage(phone, confirmation);
 
         // Send CIBIL guide PDF

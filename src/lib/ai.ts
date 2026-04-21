@@ -33,6 +33,7 @@ const KEY_MAP: Record<string, string> = {
   "topup": "Top-up Loan",
   "salaried": "Salaried",
   "self_employed": "Self Employed",
+  "sep": "Self Employed Prof.",
   "above100": "100k+",
   "50_100": "50k-100k",
   "25_50": "25k-50k",
@@ -41,6 +42,9 @@ const KEY_MAP: Record<string, string> = {
   "700_750": "700-750",
   "650_700": "650-700",
   "below650": "Below 650",
+  "immediate": "Immediate",
+  "3days": "Within 3 Days",
+  "7days": "Within 7 Days",
 };
 
 function formatValue(val: any): string {
@@ -78,24 +82,42 @@ export async function getAIResponse(
 
   console.log(`[AI] Generating response for: "${lastUserMessage}"`);
   
-  const chat = model.startChat({
-    history: history,
-    systemInstruction: { role: "system", parts: [{ text: systemPrompt }] },
-  });
-
   let lastError;
-  for (let i = 0; i < 3; i++) {
-    try {
-      const result = await chat.sendMessage(lastUserMessage);
-      const response = await result.response;
-      return response.text();
-    } catch (error) {
-      console.error(`[AI] Attempt ${i + 1} failed:`, error);
-      lastError = error;
-      // Exponential backoff
-      if (i < 2) await new Promise(resolve => setTimeout(resolve, 1500 * (i + 1)));
+  const modelsToTry = ["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"];
+  
+  // Outer loop to try the whole sequence again if needed (Total 2 full rotations)
+  for (let rotation = 0; rotation < 2; rotation++) {
+    for (const modelName of modelsToTry) {
+      // Try each model up to 3 times
+      for (let i = 0; i < 3; i++) {
+        try {
+          const currentModel = genAI.getGenerativeModel({ model: modelName });
+          const chat = currentModel.startChat({
+            history: history,
+            systemInstruction: { role: "system", parts: [{ text: systemPrompt }] },
+          });
+
+          console.log(`[AI] Attempting ${modelName} (Rotation ${rotation + 1}, Try ${i + 1})...`);
+          const result = await chat.sendMessage(lastUserMessage);
+          const response = await result.response;
+          return response.text();
+        } catch (error: any) {
+          console.error(`[AI] ${modelName} fail (Rot ${rotation + 1}, Try ${i + 1}):`, error.message);
+          lastError = error;
+          
+          // If it's a 503 or 429, wait a bit before retrying the same model
+          if (error.message?.includes("503") || error.message?.includes("429")) {
+            if (i < 2) {
+              await new Promise(resolve => setTimeout(resolve, 1500 * (i + 1)));
+              continue;
+            }
+          }
+          // If it's another error or we already tried 3 times, move to next model
+          break;
+        }
+      }
     }
   }
 
-  throw lastError || new Error("Failed to generate AI response after 3 attempts");
+  throw lastError || new Error("Failed to generate AI response after trying all available models");
 }
