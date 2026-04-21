@@ -238,8 +238,7 @@ async function processWebhook(body: any, host: string = "") {
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
         console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
 
-        console.log(`[Webhook] Updating conversation ${conversation.id} with flow data...`);
-        const { error: updateError } = await supabase.from("conversations").update({
+        const updatePayload = {
           employment_type: flowData.employment_type || flowData.employment,
           income_range: flowData.income_range || flowData.income,
           cibil_range: flowData.cibil_range || flowData.cibil,
@@ -250,12 +249,18 @@ async function processWebhook(body: any, host: string = "") {
           qualified_at: new Date().toISOString(),
           flow_data: flowData,
           updated_at: new Date().toISOString()
-        }).eq("id", conversation.id);
+        };
+
+        console.log(`[Webhook] Updating conversation ${conversation.id} with payload:`, JSON.stringify(updatePayload));
+        const { error: updateError } = await supabase.from("conversations").update(updatePayload).eq("id", conversation.id);
 
         if (updateError) {
           console.error("[Webhook] FAIL: Error updating conversation with flow data:", updateError);
         } else {
           console.log("[Webhook] PASS: Conversation updated with flow data");
+          // Verify the update by fetching it back
+          const { data: verifyConvo } = await supabase.from("conversations").select("*").eq("id", conversation.id).single();
+          console.log("[Webhook] Verified DB State after update:", JSON.stringify(verifyConvo));
         }
 
         // Store the form submission summary for the dashboard
@@ -387,13 +392,16 @@ async function processWebhook(body: any, host: string = "") {
           .from("messages")
           .select("role, content")
           .eq("conversation_id", conversation.id)
-          .order("created_at", { ascending: true })
+          .order("created_at", { ascending: false })
           .limit(20);
 
         if (historyError) console.error("[Webhook] History fetch error:", historyError);
 
+        // Sort back to ascending for AI processing
+        const sortedHistory = (history || []).reverse();
+
         const aiResponse = await getAIResponse(
-          (history || []).map((m) => ({
+          sortedHistory.map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           })),

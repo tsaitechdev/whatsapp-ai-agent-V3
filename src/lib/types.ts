@@ -5,6 +5,14 @@ export interface Conversation {
   mode: "agent" | "human";
   updated_at: string;
   created_at: string;
+  employment_type?: string | null;
+  income_range?: string | null;
+  cibil_range?: string | null;
+  loan_type?: string | null;
+  loan_amount?: string | null;
+  city?: string | null;
+  timeline?: string | null;
+  qualified_at?: string | null;
 }
 
 export interface Message {
