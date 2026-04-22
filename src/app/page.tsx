@@ -47,6 +47,7 @@ export default function Dashboard() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [showPipeline, setShowPipeline] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -63,7 +64,7 @@ export default function Dashboard() {
   }, []);
 
   const fetchConversations = useCallback(async () => {
-    const res = await fetch("/api/conversations");
+    const res = await fetch("/api/conversations?t=" + Date.now(), { cache: 'no-store' });
     const data = await res.json();
     setConversations(data);
   }, []);
@@ -251,8 +252,76 @@ export default function Dashboard() {
     document.body.removeChild(link);
   }
 
+  const statuses = ["New", "Interested", "In Progress", "Follow-up Required", "Closed (Won)", "Closed (Lost)"];
+
   return (
     <div className="flex h-screen bg-[#0f0f0f] font-sans">
+      {/* Pipeline Overlay */}
+      {showPipeline && (
+        <div className="fixed inset-0 z-50 bg-[#0f0f0f] flex flex-col">
+          <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between" style={{ background: "#141414" }}>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7" />
+                  <rect x="14" y="3" width="7" height="7" />
+                  <rect x="14" y="14" width="7" height="7" />
+                  <rect x="3" y="14" width="7" height="7" />
+                </svg>
+              </div>
+              <h2 className="text-lg font-bold text-white">Lead Pipeline</h2>
+            </div>
+            <button 
+              onClick={() => setShowPipeline(false)}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-lg transition-all"
+            >
+              Close
+            </button>
+          </div>
+          
+          <div className="flex-1 overflow-x-auto p-6 flex gap-6 bg-[#0a0a0a]">
+            {statuses.map(status => {
+              const leads = conversations.filter(c => (c.status || "New") === status);
+              return (
+                <div key={status} className="w-[300px] flex-shrink-0 flex flex-col gap-4">
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest">{status}</h3>
+                    <span className="text-[10px] bg-white/5 text-white/40 px-2 py-0.5 rounded-full">{leads.length}</span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-2">
+                    {leads.map(lead => (
+                      <div 
+                        key={lead.id} 
+                        onClick={() => {
+                          setSelectedId(lead.id);
+                          setShowPipeline(false);
+                        }}
+                        className={`p-4 rounded-xl border border-white/[0.06] cursor-pointer transition-all hover:border-emerald-500/40 hover:bg-white/[0.02] ${lead.is_hot_lead ? 'bg-orange-500/5 border-orange-500/20' : 'bg-[#141414]'}`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-semibold text-white/90 truncate">{lead.name || lead.phone}</span>
+                          {lead.is_hot_lead && <span className="text-orange-500">🔥</span>}
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[11px] text-white/40 truncate">{formatValue(lead.loan_amount)} {formatValue(lead.loan_type)}</p>
+                          <p className="text-[10px] text-white/25">{lead.city || "No City"}</p>
+                        </div>
+                        <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center justify-between">
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold ${lead.priority === 'High' || lead.priority === 'Urgent' ? 'bg-red-500/20 text-red-400' : 'bg-white/5 text-white/30'}`}>
+                            {lead.priority || "Medium"}
+                          </span>
+                          <span className="text-[9px] text-white/20">{new Date(lead.updated_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       <div className="w-[320px] flex flex-col border-r border-white/[0.06]" style={{ background: "#141414" }}>
         {/* Sidebar Header */}
@@ -268,17 +337,41 @@ export default function Dashboard() {
               <p className="text-xs text-white/40 leading-tight mt-0.5">{conversations.length} leads</p>
             </div>
           </div>
-          <button 
-            onClick={exportToCSV}
-            className="p-1.5 rounded-md hover:bg-white/10 text-white/40 hover:text-white/90 transition-all"
-            title="Export to CSV"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={fetchConversations}
+              className="p-1.5 rounded-md hover:bg-white/10 text-white/40 hover:text-white/90 transition-all"
+              title="Refresh Data"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 4v6h-6" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+            </button>
+            <button 
+              onClick={() => setShowPipeline(true)}
+              className="p-1.5 rounded-md hover:bg-white/10 text-white/40 hover:text-white/90 transition-all"
+              title="Pipeline View"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+              </svg>
+            </button>
+            <button 
+              onClick={exportToCSV}
+              className="p-1.5 rounded-md hover:bg-white/10 text-white/40 hover:text-white/90 transition-all"
+              title="Export to CSV"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Conversation List */}

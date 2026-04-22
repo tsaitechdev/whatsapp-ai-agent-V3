@@ -189,6 +189,7 @@ async function processWebhook(body: any, host: string = "") {
     const name = contact?.profile?.name || null;
     const whatsappMsgId = message.id;
 
+    console.log(`[Webhook] Raw Message:`, JSON.stringify(message));
     console.log(`[Webhook] Type: ${message.type}, From: ${phone}, ID: ${whatsappMsgId}`);
 
     // Fetch conversation first so it's available for gatekeeping
@@ -295,16 +296,29 @@ async function processWebhook(body: any, host: string = "") {
         };
 
         console.log(`[Webhook] Updating conversation ${conversation.id} with payload:`, JSON.stringify(updatePayload));
-        const { error: updateError } = await supabase.from("conversations").update(updatePayload).eq("id", conversation.id);
-
-        if (updateError) {
-          console.error("[Webhook] FAIL: Error updating conversation with flow data:", updateError);
-        } else {
-          console.log("[Webhook] PASS: Conversation updated with flow data");
-          // Verify the update by fetching it back
-          const { data: verifyConvo } = await supabase.from("conversations").select("*").eq("id", conversation.id).single();
-          console.log("[Webhook] Verified DB State after update:", JSON.stringify(verifyConvo));
+        
+        // Wrap update in try/catch to ensure we still send acknowledgement even if CRM fields fail
+        try {
+          const { error: updateError } = await supabase.from("conversations").update(updatePayload).eq("id", conversation.id);
+          if (updateError) {
+            console.error("[Webhook] FAIL: Error updating conversation with flow data:", updateError);
+            await logError({
+              conversation_id: conversation.id,
+              component: "webhook-flow",
+              level: "warn",
+              message: `Conversation update failed: ${updateError.message}`,
+              metadata: { updatePayload }
+            });
+          } else {
+            console.log("[Webhook] PASS: Conversation updated with flow data");
+          }
+        } catch (dbErr: any) {
+          console.error("[Webhook] DB Crash during conversation update:", dbErr);
         }
+
+        // Verify the update by fetching it back for logs
+        const { data: verifyConvo } = await supabase.from("conversations").select("*").eq("id", conversation.id).single();
+        console.log("[Webhook] DB State after update attempt:", JSON.stringify(verifyConvo));
 
         // Store the form submission summary for the dashboard
         const amountStr = formatValue(flowData.loan_amount || flowData.amount);
@@ -313,26 +327,33 @@ async function processWebhook(body: any, host: string = "") {
         const incomeStr = formatValue(flowData.income_range || flowData.income);
 
         const summary = `Form Submitted: ${amountStr} ${typeStr} in ${cityStr} (Income: ${incomeStr})`;
-        // Update the gating message with the actual summary
-        await supabase.from("messages").update({
-          content: summary
-        }).eq("whatsapp_msg_id", whatsappMsgId);
+        
+        try {
+          // Update the gating message with the actual summary
+          await supabase.from("messages").update({
+            content: summary
+          }).eq("whatsapp_msg_id", whatsappMsgId);
 
-        const confirmation = `Thanks! We've received your ${amountStr} ${typeStr} request. An advisor from Team Finjoat will call you within 2 hours.`;
-        const confRes = await sendWhatsAppMessage(phone, confirmation);
-        const confMsgId = confRes?.messages?.[0]?.id;
+          const confirmation = `Thanks! We've received your ${amountStr} ${typeStr} request. An advisor from Team Finjoat will call you within 2 hours.`;
+          
+          console.log("[Webhook] Sending acknowledgment...");
+          const confRes = await sendWhatsAppMessage(phone, confirmation);
+          const confMsgId = confRes?.messages?.[0]?.id;
 
-        // Send CIBIL guide PDF
-        const pdfUrl = `https://${host}/cibil-guide.pdf`;
-        console.log(`[Webhook] Sending CIBIL guide PDF: ${pdfUrl}`);
-        await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
+          // Send CIBIL guide PDF
+          const pdfUrl = `https://${host}/cibil-guide.pdf`;
+          console.log(`[Webhook] Sending CIBIL guide PDF: ${pdfUrl}`);
+          await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
 
-        await supabase.from("messages").insert({
-          conversation_id: conversation.id,
-          role: "assistant",
-          content: confirmation,
-          whatsapp_msg_id: confMsgId
-        });
+          await supabase.from("messages").insert({
+            conversation_id: conversation.id,
+            role: "assistant",
+            content: confirmation,
+            whatsapp_msg_id: confMsgId
+          });
+        } catch (msgErr: any) {
+          console.error("[Webhook] Error during acknowledgment sending:", msgErr);
+        }
 
         console.log("[Webhook] PASS: Interactive nfm_reply processing complete");
       } catch (parseError) {
@@ -414,6 +435,8 @@ async function processWebhook(body: any, host: string = "") {
 
       console.log("[Webhook] Getting AI response...");
       try {
+        const { data: updatedConvo } = await supabase.from("conversations").select("*").eq("id", conversation.id).single();
+
         const { data: history, error: historyError } = await supabase
           .from("messages")
           .select("role, content")
@@ -431,7 +454,7 @@ async function processWebhook(body: any, host: string = "") {
             role: m.role as "user" | "assistant",
             content: m.content,
           })),
-          latestConvo // Pass the latest conversation context
+          updatedConvo // Pass the truly latest conversation context
         );
         
         console.log("[Webhook] Sending AI response...");

@@ -16,10 +16,10 @@ export async function PATCH(
   if (body.mode) updateData.mode = body.mode;
   if (body.status) updateData.status = body.status;
   if (body.priority) updateData.priority = body.priority;
-  if (body.internal_notes !== undefined) updateData.internal_notes = body.internal_notes;
-  if (body.assigned_to !== undefined) updateData.assigned_to = body.assigned_to;
-  if (body.follow_up_at !== undefined) updateData.follow_up_at = body.follow_up_at;
-  if (body.is_hot_lead !== undefined) updateData.is_hot_lead = body.is_hot_lead;
+  if (body.internal_notes !== undefined) updateData.internal_notes = body.internal_notes || null;
+  if (body.assigned_to !== undefined) updateData.assigned_to = body.assigned_to || null;
+  if (body.follow_up_at !== undefined) updateData.follow_up_at = body.follow_up_at || null;
+  if (body.is_hot_lead !== undefined) updateData.is_hot_lead = body.is_hot_lead === true || body.is_hot_lead === "true";
 
   const { data, error } = await supabase
     .from("conversations")
