@@ -13,6 +13,9 @@ export interface Conversation {
   city?: string | null;
   timeline?: string | null;
   qualified_at?: string | null;
+  status: string;
+  priority: string;
+  internal_notes: string | null;
 }
 
 export interface Message {
@@ -21,6 +24,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   whatsapp_msg_id: string | null;
+  status: "sent" | "delivered" | "read";
   created_at: string;
 }
 

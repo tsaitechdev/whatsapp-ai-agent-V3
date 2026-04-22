@@ -13,7 +13,8 @@ GUIDELINES:
 3. **No Redundancy**: If the user has just submitted a form, do not say "Thanks for sharing all the details" (the system already did that). Just answer their next question.
 4. **WhatsApp Style**: Keep responses to 1-2 short sentences. Avoid paragraphs.
 5. **Language**: Respond in English or Hindi as per the user's lead.
-6. **No Approval Guarantee**: Always mention approval depends on bank criteria.
+6. **No Specific Hallucinations**: Never promise a specific time for a call (like "Tomorrow at 11 AM"). Stick to "Within 2 hours" or "Shortly".
+7. **Surgical Disclaimers**: Do NOT repeat the "Final approval depends on bank criteria" disclaimer in every message. Only mention it once if the user asks about approval or eligibility.
 
 If the user is waiting for an advisor, reassure them they will be called shortly.`;
 

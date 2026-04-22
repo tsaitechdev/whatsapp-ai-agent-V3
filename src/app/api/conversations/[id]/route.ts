@@ -12,9 +12,15 @@ export async function PATCH(
     return Response.json({ error: "Invalid mode" }, { status: 400 });
   }
 
+  const updateData: any = {};
+  if (body.mode) updateData.mode = body.mode;
+  if (body.status) updateData.status = body.status;
+  if (body.priority) updateData.priority = body.priority;
+  if (body.internal_notes !== undefined) updateData.internal_notes = body.internal_notes;
+
   const { data, error } = await supabase
     .from("conversations")
-    .update({ mode: body.mode })
+    .update(updateData)
     .eq("id", id)
     .select()
     .single();

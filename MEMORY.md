@@ -16,12 +16,25 @@ An automated WhatsApp-based lead qualification system for Finjoat (Personal Loan
 4.  **Operator Dashboard**: Added a "Lead Details" sidebar and a "CSV Export" feature to [`src/app/page.tsx`](src/app/page.tsx).
 5.  **Technical Mapping**: Implemented a `KEY_MAP` to translate technical Flow codes (e.g., `10_20`, `sep`) into professional text for both AI and users.
 6.  **Human Mode**: Disabled automatic switching to human mode; it is now a manual trigger for the operator to ensure AI stays active as long as needed.
+7.  **Webhook Gating**: Implemented high-speed atomic locking using the `messages` table's unique constraint to block concurrent Meta retries.
+8.  **AI Error Handling**: Fixed the role-sequence bug ("First content should be with role user") by ensuring chat history always starts with a user message.
+9.  **Lead Management CRM**: Added `status`, `priority`, and `internal_notes` to conversations with an interactive CRM panel in the dashboard.
+10. **WhatsApp Status Tracking**: Implemented real-time tracking and UI display for message delivery status (Sent, Delivered, Read).
+
+## Current CRM & Feature Plan
+1.  **Global Debug System**:
+    -   Create a dedicated logging mechanism to track the lifecycle of every message for easier troubleshooting.
+2.  **Advanced Lead Automation**:
+    -   Add "Abandoned Flow" follow-ups.
+    -   Real-time browser notifications for new leads.
 
 ## Database Schema (`conversations` table)
 - `phone` (Unique Key)
 - `employment_type`, `income_range`, `cibil_range`, `loan_type`, `loan_amount`, `city`, `timeline`
 - `qualified_at` (Qualification timestamp)
 - `mode` (`agent` or `human`)
+- `internal_notes` (Planned)
+- `status` (Planned)
 
 ## Known Issues & Future Ideas
 - **Vercel Timeout**: Background processing was reverted because standard Serverless functions kill non-awaited tasks. Stay aware of the 10s Meta retry window.

@@ -117,6 +117,18 @@ export default function Dashboard() {
     );
   }
 
+  async function updateCRMField(field: string, value: string) {
+    if (!selected) return;
+    await fetch(`/api/conversations/${selected.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value }),
+    });
+    setConversations((prev) =>
+      prev.map((c) => (c.id === selected.id ? { ...c, [field]: value } : c))
+    );
+  }
+
   async function handleSend() {
     if (!input.trim() || !selectedId || sending) return;
     setSending(true);
@@ -139,13 +151,50 @@ export default function Dashboard() {
     return phone.slice(-2);
   }
 
+  function MessageStatus({ status }: { status?: string }) {
+    if (!status || status === "sent") {
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-white/40">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      );
+    }
+    if (status === "delivered") {
+      return (
+        <div className="flex -space-x-1.5 text-white/40">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
+      );
+    }
+    if (status === "read") {
+      return (
+        <div className="flex -space-x-1.5 text-blue-400">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
+      );
+    }
+    return null;
+  }
+
   function exportToCSV() {
     if (conversations.length === 0) return;
     
-    const headers = ["Phone", "Name", "Employment", "Income", "CIBIL", "Loan Amount", "Loan Type", "City", "Timeline", "Qualified At"];
+    const headers = ["Phone", "Name", "Status", "Priority", "Employment", "Income", "CIBIL", "Loan Amount", "Loan Type", "City", "Timeline", "Qualified At", "Notes"];
     const rows = conversations.map(c => [
       c.phone,
       c.name || "",
+      c.status || "New",
+      c.priority || "Medium",
       formatValue(c.employment_type),
       formatValue(c.income_range),
       formatValue(c.cibil_range),
@@ -153,7 +202,8 @@ export default function Dashboard() {
       formatValue(c.loan_type),
       c.city || "",
       c.timeline || "",
-      c.qualified_at ? new Date(c.qualified_at).toLocaleString() : ""
+      c.qualified_at ? new Date(c.qualified_at).toLocaleString() : "",
+      c.internal_notes || ""
     ]);
 
     const csvContent = [
@@ -337,9 +387,10 @@ export default function Dashboard() {
                             <p className="whitespace-pre-wrap">{msg.content}</p>
                           </div>
                           {showTime && (
-                            <p className="text-[10px] text-white/25 mt-1.5 px-1">
+                            <p className="text-[10px] text-white/25 mt-1.5 px-1 flex items-center gap-1">
                               {!isUser && <span className="text-emerald-500/60 mr-1">AI ·</span>}
                               {formatTime(msg.created_at)}
+                              {!isUser && <MessageStatus status={msg.status} />}
                             </p>
                           )}
                         </div>
@@ -417,16 +468,62 @@ export default function Dashboard() {
                         <div>
                           <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">City</p>
                           <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {selected.city || "N/A"}
+                            {formatValue(selected.city)}
                           </p>
                         </div>
                         <div>
                           <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Timeline</p>
                           <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {selected.timeline || "N/A"}
+                            {formatValue(selected.timeline)}
                           </p>
                         </div>
                       </div>
+                      
+                      {/* CRM Panel */}
+                      <div className="pt-6 mt-6 border-t border-white/[0.06] space-y-4">
+                        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">CRM Management</h3>
+                        
+                        <div>
+                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Lead Status</p>
+                          <select 
+                            value={selected.status || "New"}
+                            onChange={(e) => updateCRMField("status", e.target.value)}
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                          >
+                            <option value="New">New</option>
+                            <option value="Interested">Interested</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Follow-up Required">Follow-up Required</option>
+                            <option value="Closed (Won)">Closed (Won)</option>
+                            <option value="Closed (Lost)">Closed (Lost)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Priority</p>
+                          <select 
+                            value={selected.priority || "Medium"}
+                            onChange={(e) => updateCRMField("priority", e.target.value)}
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                          >
+                            <option value="Low">Low</option>
+                            <option value="Medium">Medium</option>
+                            <option value="High">High</option>
+                            <option value="Urgent">Urgent</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Internal Notes</p>
+                          <textarea 
+                            defaultValue={selected.internal_notes || ""}
+                            onBlur={(e) => updateCRMField("internal_notes", e.target.value)}
+                            placeholder="Add notes about this lead..."
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 min-h-[80px] resize-none"
+                          />
+                        </div>
+                      </div>
+
                       <div className="pt-4 border-t border-white/[0.06]">
                         <p className="text-[10px] text-emerald-500/60 uppercase font-bold mb-1">Status: Qualified</p>
                         <p className="text-[10px] text-white/20 uppercase font-medium">

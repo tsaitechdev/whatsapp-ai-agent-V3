@@ -5,6 +5,24 @@ create table conversations (
   phone text unique not null,
   name text,
   mode text not null default 'agent' check (mode in ('agent', 'human')),
+  
+  -- Lead Details
+  employment_type text,
+  income_range text,
+  cibil_range text,
+  loan_type text,
+  loan_amount text,
+  city text,
+  timeline text,
+  qualified_at timestamp with time zone,
+  flow_data jsonb,
+  last_flow_sent timestamp with time zone,
+  
+  -- CRM Fields
+  status text default 'New',
+  priority text default 'Medium',
+  internal_notes text,
+
   updated_at timestamp with time zone default now(),
   created_at timestamp with time zone default now()
 );
@@ -15,6 +33,7 @@ create table messages (
   role text not null check (role in ('user', 'assistant')),
   content text not null,
   whatsapp_msg_id text unique,
+  status text default 'sent', -- For double/blue ticks: sent, delivered, read
   created_at timestamp with time zone default now()
 );
 

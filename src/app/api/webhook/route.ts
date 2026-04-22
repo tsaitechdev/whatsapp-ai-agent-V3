@@ -160,8 +160,24 @@ async function processWebhook(body: any, host: string = "") {
     const changes = entry?.changes?.[0];
     const value = changes?.value;
 
+    // 1. Handle Message Status Updates (Sent, Delivered, Read)
+    if (value?.statuses?.[0]) {
+      const statusUpdate = value.statuses[0];
+      const whatsappMsgId = statusUpdate.id;
+      const status = statusUpdate.status; // 'delivered' or 'read'
+
+      console.log(`[Webhook] Status Update: ${whatsappMsgId} is now ${status}`);
+      
+      await supabase
+        .from("messages")
+        .update({ status })
+        .eq("whatsapp_msg_id", whatsappMsgId);
+      
+      return;
+    }
+
     if (!value?.messages?.[0]) {
-      console.log("SKIP: No messages in webhook payload");
+      console.log("SKIP: No messages or statuses in webhook payload");
       return;
     }
 
@@ -174,20 +190,7 @@ async function processWebhook(body: any, host: string = "") {
 
     console.log(`[Webhook] Type: ${message.type}, From: ${phone}, ID: ${whatsappMsgId}`);
 
-    // Early duplicate check to prevent concurrent processing of retries
-    const { data: existingMsg } = await supabase
-      .from("messages")
-      .select("id")
-      .eq("whatsapp_msg_id", whatsappMsgId)
-      .maybeSingle();
-    
-    if (existingMsg) {
-      console.log(`[Webhook] Duplicate message ID ${whatsappMsgId} ignored.`);
-      return;
-    }
-
-    // 1. Fetch or create conversation first so it's available for all message types
-    console.log("[Webhook] Fetching/creating conversation...");
+    // Fetch conversation first so it's available for gatekeeping
     let { data: conversation, error: convoError } = await supabase
       .from("conversations")
       .select("*")
@@ -211,11 +214,36 @@ async function processWebhook(body: any, host: string = "") {
          return;
       }
       conversation = newConvo;
-    } else if (name && name !== conversation.name) {
-      await supabase
-        .from("conversations")
-        .update({ name })
-        .eq("id", conversation.id);
+    }
+
+    // GATING: Use the messages table as a high-speed lock. 
+    // This handles concurrent retries because the whatsapp_msg_id is UNIQUE.
+    if (message.type === 'text') {
+      const text = message.text.body;
+      const { error: insertError } = await supabase.from("messages").insert({
+        conversation_id: conversation.id,
+        role: "user",
+        content: text,
+        whatsapp_msg_id: whatsappMsgId,
+      });
+
+      if (insertError) {
+         if (insertError.code === "23505") {
+            console.log(`[Webhook] Duplicate/Concurrent message ID ${whatsappMsgId} blocked.`);
+            return;
+         } else {
+            console.error("[Webhook] FAIL: Error during gating insert:", insertError);
+         }
+      }
+    } else if (message.type === 'interactive' && message.interactive?.type === 'nfm_reply') {
+       // Similar gating for nfm_reply
+       const { error: insertError } = await supabase.from("messages").insert({
+          conversation_id: conversation.id,
+          role: "user",
+          content: "Form Submission",
+          whatsapp_msg_id: whatsappMsgId,
+       });
+       if (insertError) return; // Silent return for flow duplicates
     }
 
     if (!conversation) {
@@ -283,7 +311,8 @@ async function processWebhook(body: any, host: string = "") {
         });
 
         const confirmation = `Thanks! We've received your ${amount} ${type} request. An advisor from Team Finjoat will call you within 2 hours.`;
-        await sendWhatsAppMessage(phone, confirmation);
+        const confRes = await sendWhatsAppMessage(phone, confirmation);
+        const confMsgId = confRes?.messages?.[0]?.id;
 
         // Send CIBIL guide PDF
         const pdfUrl = `https://${host}/cibil-guide.pdf`;
@@ -293,7 +322,8 @@ async function processWebhook(body: any, host: string = "") {
         await supabase.from("messages").insert({
           conversation_id: conversation.id,
           role: "assistant",
-          content: confirmation
+          content: confirmation,
+          whatsapp_msg_id: confMsgId
         });
 
         console.log("[Webhook] PASS: Interactive nfm_reply processing complete");
@@ -414,12 +444,14 @@ async function processWebhook(body: any, host: string = "") {
         );
         
         console.log("[Webhook] Sending AI response...");
-        await sendWhatsAppMessage(phone, aiResponse);
+        const waRes = await sendWhatsAppMessage(phone, aiResponse);
+        const waMsgId = waRes?.messages?.[0]?.id;
 
         await supabase.from("messages").insert({
           conversation_id: conversation.id,
           role: "assistant",
           content: aiResponse,
+          whatsapp_msg_id: waMsgId
         });
 
         await supabase
