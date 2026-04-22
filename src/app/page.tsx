@@ -46,9 +46,21 @@ export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const selected = conversations.find((c) => c.id === selectedId);
+
+  useEffect(() => {
+    // Initialize audio
+    audioRef.current = new Audio("/notification.mp3");
+    
+    // Request notification permission
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
 
   const fetchConversations = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -89,6 +101,18 @@ export default function Dashboard() {
               return [...prev, newMsg];
             });
           }
+
+          // Trigger sound and notification
+          if (newMsg.role === "user") {
+            audioRef.current?.play().catch(() => {});
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification("New message from " + (conversations.find(c => c.id === newMsg.conversation_id)?.name || "Lead"), {
+                body: newMsg.content,
+                icon: "/favicon.ico"
+              });
+            }
+          }
+
           fetchConversations();
         }
       )
@@ -117,15 +141,20 @@ export default function Dashboard() {
     );
   }
 
-  async function updateCRMField(field: string, value: string) {
+  async function updateCRMField(field: string, value: any) {
     if (!selected) return;
+    
+    // Convert string "true"/"false" to boolean if field is is_hot_lead
+    let finalValue = value;
+    if (field === "is_hot_lead") finalValue = value === "true";
+
     await fetch(`/api/conversations/${selected.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [field]: value }),
+      body: JSON.stringify({ [field]: finalValue }),
     });
     setConversations((prev) =>
-      prev.map((c) => (c.id === selected.id ? { ...c, [field]: value } : c))
+      prev.map((c) => (c.id === selected.id ? { ...c, [field]: finalValue } : c))
     );
   }
 
@@ -284,9 +313,20 @@ export default function Dashboard() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-white/90 truncate">
-                        {convo.name || convo.phone}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-sm font-medium text-white/90 truncate">
+                          {convo.name || convo.phone}
+                        </span>
+                        {convo.is_hot_lead && (
+                          <span title="Hot Lead" className="text-orange-500 flex-shrink-0 animate-pulse">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M12 21.1c-.1 0-.3 0-.4-.1-2.3-1.1-4.7-3.4-5.3-6.1-.3-1.4.1-3 1.3-4.1.2-.2.5-.2.7 0 .2.2.2.5 0 .7-1 .9-1.2 2.2-.9 3.4.5 2.2 2.6 4.1 4.5 5 1.9-.9 4-2.8 4.5-5 .3-1.2.1-2.5-.9-3.4-.2-.2-.2-.5 0-.7.2-.2.5-.2.7 0 1.2 1.1 1.6 2.7 1.3 4.1-.6 2.7-3 5-5.3 6.1-.1.1-.3.1-.4.1z" />
+                              <path d="M12 17.5c-2.4 0-4.3-1.9-4.3-4.3 0-1.2.5-2.3 1.3-3.1.2-.2.5-.2.7 0 .2.2.2.5 0 .7-.6.6-1 1.5-1 2.4 0 1.8 1.5 3.3 3.3 3.3s3.3-1.5 3.3-3.3c0-.9-.4-1.8-1-2.4-.2-.2-.2-.5 0-.7.2-.2.5-.2.7 0 .8.8 1.3 1.9 1.3 3.1 0 2.4-1.9 4.3-4.3 4.3z" />
+                              <path d="M12 12c-.3 0-.5-.2-.5-.5v-9c0-.3.2-.5.5-.5s.5.2.5.5v9c0 .3-.2.5-.5.5z" />
+                            </svg>
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] text-white/30 flex-shrink-0">
                         {formatTime(convo.updated_at)}
                       </span>
@@ -387,11 +427,19 @@ export default function Dashboard() {
                             <p className="whitespace-pre-wrap">{msg.content}</p>
                           </div>
                           {showTime && (
-                            <p className="text-[10px] text-white/25 mt-1.5 px-1 flex items-center gap-1">
-                              {!isUser && <span className="text-emerald-500/60 mr-1">AI ·</span>}
-                              {formatTime(msg.created_at)}
-                              {!isUser && <MessageStatus status={msg.status} />}
-                            </p>
+                            <div className="flex flex-col items-start gap-1">
+                              <p className="text-[10px] text-white/25 mt-1.5 px-1 flex items-center gap-1">
+                                {!isUser && <span className="text-emerald-500/60 mr-1">AI ·</span>}
+                                {formatTime(msg.created_at)}
+                                {!isUser && <MessageStatus status={msg.status} />}
+                              </p>
+                              {debugMode && (
+                                <p className="text-[9px] text-white/10 font-mono px-1 break-all bg-white/[0.02] rounded p-1">
+                                  ID: {msg.whatsapp_msg_id || 'LOCAL'}<br/>
+                                  Raw Status: {msg.status || 'sent'}
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -434,8 +482,19 @@ export default function Dashboard() {
 
               {/* Lead Details Sidebar */}
               <div className="w-[280px] border-l border-white/[0.06] flex flex-col" style={{ background: "#141414" }}>
-                <div className="px-5 py-4 border-b border-white/[0.06]">
+                <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
                   <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Lead Details</h3>
+                  <button 
+                    onClick={() => setDebugMode(!debugMode)}
+                    className={`p-1 rounded transition-colors ${debugMode ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-white/5 text-white/20'}`}
+                    title="Toggle Debug Info"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-5 space-y-6">
                   {selected.qualified_at ? (
@@ -488,14 +547,14 @@ export default function Dashboard() {
                           <select 
                             value={selected.status || "New"}
                             onChange={(e) => updateCRMField("status", e.target.value)}
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
                           >
-                            <option value="New">New</option>
-                            <option value="Interested">Interested</option>
-                            <option value="In Progress">In Progress</option>
-                            <option value="Follow-up Required">Follow-up Required</option>
-                            <option value="Closed (Won)">Closed (Won)</option>
-                            <option value="Closed (Lost)">Closed (Lost)</option>
+                            <option value="New" className="bg-[#141414] text-white">New</option>
+                            <option value="Interested" className="bg-[#141414] text-white">Interested</option>
+                            <option value="In Progress" className="bg-[#141414] text-white">In Progress</option>
+                            <option value="Follow-up Required" className="bg-[#141414] text-white">Follow-up Required</option>
+                            <option value="Closed (Won)" className="bg-[#141414] text-white">Closed (Won)</option>
+                            <option value="Closed (Lost)" className="bg-[#141414] text-white">Closed (Lost)</option>
                           </select>
                         </div>
 
@@ -504,13 +563,44 @@ export default function Dashboard() {
                           <select 
                             value={selected.priority || "Medium"}
                             onChange={(e) => updateCRMField("priority", e.target.value)}
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
                           >
-                            <option value="Low">Low</option>
-                            <option value="Medium">Medium</option>
-                            <option value="High">High</option>
-                            <option value="Urgent">Urgent</option>
+                            <option value="Low" className="bg-[#141414] text-white">Low</option>
+                            <option value="Medium" className="bg-[#141414] text-white">Medium</option>
+                            <option value="High" className="bg-[#141414] text-white">High</option>
+                            <option value="Urgent" className="bg-[#141414] text-white">Urgent</option>
                           </select>
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Assigned To</p>
+                          <input 
+                            type="text"
+                            defaultValue={selected.assigned_to || ""}
+                            onBlur={(e) => updateCRMField("assigned_to", e.target.value)}
+                            placeholder="Advisor name..."
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                          />
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Follow-up At</p>
+                          <input 
+                            type="datetime-local"
+                            defaultValue={selected.follow_up_at ? new Date(selected.follow_up_at).toISOString().slice(0, 16) : ""}
+                            onBlur={(e) => updateCRMField("follow_up_at", e.target.value)}
+                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                          <span className="text-xs text-white/60">Hot Lead</span>
+                          <button
+                            onClick={() => updateCRMField("is_hot_lead", (!selected.is_hot_lead).toString())}
+                            className={`w-10 h-5 rounded-full transition-colors relative ${selected.is_hot_lead ? 'bg-orange-500' : 'bg-white/10'}`}
+                          >
+                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selected.is_hot_lead ? 'right-1' : 'left-1'}`} />
+                          </button>
                         </div>
 
                         <div>

@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppMessage, sendWhatsAppDocument } from "@/lib/whatsapp";
 import { getAIResponse } from "@/lib/ai";
+import { logError } from "@/lib/logger";
 
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -271,17 +272,26 @@ async function processWebhook(body: any, host: string = "") {
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
         console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
 
+        // LEAD SCORING LOGIC
+        const income = flowData.income_range || flowData.income;
+        const cibil = flowData.cibil_range || flowData.cibil;
+        const isHotLead = 
+          (income === "above100" || income === "50_100") && 
+          (cibil === "750_plus" || cibil === "700_750");
+
         const updatePayload = {
           employment_type: flowData.employment_type || flowData.employment,
-          income_range: flowData.income_range || flowData.income,
-          cibil_range: flowData.cibil_range || flowData.cibil,
+          income_range: income,
+          cibil_range: cibil,
           loan_type: flowData.loan_type || flowData.type,
           loan_amount: flowData.loan_amount || flowData.amount,
           city: flowData.city,
           timeline: flowData.timeline,
           qualified_at: new Date().toISOString(),
           flow_data: flowData,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          is_hot_lead: isHotLead,
+          priority: isHotLead ? 'High' : 'Medium'
         };
 
         console.log(`[Webhook] Updating conversation ${conversation.id} with payload:`, JSON.stringify(updatePayload));
@@ -297,20 +307,18 @@ async function processWebhook(body: any, host: string = "") {
         }
 
         // Store the form submission summary for the dashboard
-        const amount = formatValue(flowData.loan_amount || flowData.amount);
-        const type = formatValue(flowData.loan_type || flowData.type);
-        const city = flowData.city || "N/A";
-        const income = formatValue(flowData.income_range || flowData.income);
+        const amountStr = formatValue(flowData.loan_amount || flowData.amount);
+        const typeStr = formatValue(flowData.loan_type || flowData.type);
+        const cityStr = flowData.city || "N/A";
+        const incomeStr = formatValue(flowData.income_range || flowData.income);
 
-        const summary = `Form Submitted: ${amount} ${type} in ${city} (Income: ${income})`;
-        await supabase.from("messages").insert({
-          conversation_id: conversation.id,
-          role: "user",
-          content: summary,
-          whatsapp_msg_id: whatsappMsgId
-        });
+        const summary = `Form Submitted: ${amountStr} ${typeStr} in ${cityStr} (Income: ${incomeStr})`;
+        // Update the gating message with the actual summary
+        await supabase.from("messages").update({
+          content: summary
+        }).eq("whatsapp_msg_id", whatsappMsgId);
 
-        const confirmation = `Thanks! We've received your ${amount} ${type} request. An advisor from Team Finjoat will call you within 2 hours.`;
+        const confirmation = `Thanks! We've received your ${amountStr} ${typeStr} request. An advisor from Team Finjoat will call you within 2 hours.`;
         const confRes = await sendWhatsAppMessage(phone, confirmation);
         const confMsgId = confRes?.messages?.[0]?.id;
 
@@ -349,23 +357,6 @@ async function processWebhook(body: any, host: string = "") {
       const isActuallyQualified = !!latestConvo?.qualified_at;
 
       console.log(`[Webhook] State: qual=${isActuallyQualified}, mode=${latestConvo?.mode}, text="${text}"`);
-
-      console.log("[Webhook] Storing user message...");
-      const { error: insertError } = await supabase.from("messages").insert({
-        conversation_id: conversation.id,
-        role: "user",
-        content: text,
-        whatsapp_msg_id: whatsappMsgId,
-      });
-
-      if (insertError) {
-         if (insertError.code === "23505") {
-            console.log("[Webhook] Duplicate message ID ignored.");
-            return;
-         } else {
-            console.error("[Webhook] FAIL: Error storing user message:", insertError);
-         }
-      }
 
       // Check if we already responded to this EXACT message content recently to prevent duplicates from different message IDs
       const { data: recentMsg } = await supabase
@@ -462,7 +453,12 @@ async function processWebhook(body: any, host: string = "") {
         console.log("[Webhook] SUCCESS");
 
       } catch (aiError: any) {
-         console.error("[Webhook] AI error after retries:", aiError.message);
+         await logError({
+            conversation_id: conversation.id,
+            component: "webhook-ai",
+            message: `AI error after retries: ${aiError.message}`,
+            metadata: { phone }
+         });
          // More professional fallback
          const fallbackMessage = "I'm having a small technical difficulty, but don't worry—our advisor is already notified and will call you within 2 hours to answer all your questions. Thank you for your patience!";
          await sendWhatsAppMessage(phone, fallbackMessage);

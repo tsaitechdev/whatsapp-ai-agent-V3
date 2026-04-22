@@ -16,6 +16,9 @@ export interface Conversation {
   status: string;
   priority: string;
   internal_notes: string | null;
+  assigned_to?: string | null;
+  follow_up_at?: string | null;
+  is_hot_lead?: boolean;
 }
 
 export interface Message {

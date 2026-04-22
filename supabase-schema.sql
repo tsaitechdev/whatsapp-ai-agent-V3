@@ -22,8 +22,23 @@ create table conversations (
   status text default 'New',
   priority text default 'Medium',
   internal_notes text,
+  assigned_to text,
+  follow_up_at timestamp with time zone,
+  is_hot_lead boolean default false,
 
   updated_at timestamp with time zone default now(),
+  created_at timestamp with time zone default now()
+);
+
+-- Error Logs for Global Debug System
+create table error_logs (
+  id uuid default gen_random_uuid() primary key,
+  conversation_id uuid references conversations(id) on delete set null,
+  level text not null default 'error', -- info, warn, error
+  component text not null, -- webhook, ai, whatsapp
+  message text not null,
+  stack text,
+  metadata jsonb,
   created_at timestamp with time zone default now()
 );
 

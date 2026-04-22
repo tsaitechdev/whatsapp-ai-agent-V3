@@ -20,13 +20,16 @@ An automated WhatsApp-based lead qualification system for Finjoat (Personal Loan
 8.  **AI Error Handling**: Fixed the role-sequence bug ("First content should be with role user") by ensuring chat history always starts with a user message.
 9.  **Lead Management CRM**: Added `status`, `priority`, and `internal_notes` to conversations with an interactive CRM panel in the dashboard.
 10. **WhatsApp Status Tracking**: Implemented real-time tracking and UI display for message delivery status (Sent, Delivered, Read).
+11. **Lead Scoring (Hot Leads)**: Added automatic lead scoring logic that flags "Hot Leads" based on high income and good CIBIL scores.
+12. **Advanced CRM Fields**: Added `assigned_to` and `follow_up_at` fields to allow team collaboration and scheduling.
+13. **Real-time Notifications**: Implemented browser push notifications and sound alerts for incoming user messages.
+14. **Global Error Logging**: Created a persistent `error_logs` system to track AI and Webhook issues in the database.
+15. **Abandoned Flow Recovery**: Built a Cron-ready API route [`src/app/api/cron/abandoned-flow/route.ts`](src/app/api/cron/abandoned-flow/route.ts) to automatically follow up with users who drop off.
 
-## Current CRM & Feature Plan
-1.  **Global Debug System**:
-    -   Create a dedicated logging mechanism to track the lifecycle of every message for easier troubleshooting.
-2.  **Advanced Lead Automation**:
-    -   Add "Abandoned Flow" follow-ups.
-    -   Real-time browser notifications for new leads.
+## Current Roadmap & Future Ideas
+1.  **Multi-Advisor Dashboard**: Add a filter to see only leads assigned to the logged-in user.
+2.  **AI Knowledge Base Expansion**: Integrate a PDF parser to allow the AI to answer questions directly from bank-specific policy documents.
+3.  **Analytics Dashboard**: Visual charts for Lead conversion rates, average response times, and income distribution.
 
 ## Database Schema (`conversations` table)
 - `phone` (Unique Key)
