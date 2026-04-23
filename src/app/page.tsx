@@ -48,6 +48,10 @@ export default function Dashboard() {
   const [sending, setSending] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [showPipeline, setShowPipeline] = useState(false);
+  const [viewMode, setViewMode] = useState<"chat" | "table">("chat");
+  const [filterStatus, setFilterStatus] = useState("All");
+  const [sortField, setSortField] = useState<string>("updated_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -127,7 +131,7 @@ export default function Dashboard() {
     return () => {
       supabase?.removeChannel(channel);
     };
-  }, [selectedId, fetchConversations, supabase]);
+  }, [selectedId, fetchConversations, supabase, conversations]);
 
   async function toggleMode() {
     if (!selected) return;
@@ -254,6 +258,32 @@ export default function Dashboard() {
 
   const statuses = ["New", "Interested", "In Progress", "Follow-up Required", "Closed (Won)", "Closed (Lost)"];
 
+  const filteredAndSortedLeads = useMemo(() => {
+    let list = [...conversations];
+    
+    // Filtering
+    if (filterStatus !== "All") {
+      list = list.filter(c => (c.status || "New") === filterStatus);
+    }
+
+    // Sorting
+    list.sort((a, b) => {
+      let valA: any = a[sortField as keyof typeof a];
+      let valB: any = b[sortField as keyof typeof b];
+
+      if (sortField === "updated_at" || sortField === "created_at" || sortField === "qualified_at") {
+        valA = valA ? new Date(valA).getTime() : 0;
+        valB = valB ? new Date(valB).getTime() : 0;
+      }
+
+      if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [conversations, filterStatus, sortField, sortOrder]);
+
   return (
     <div className="flex h-screen bg-[#0f0f0f] font-sans">
       {/* Pipeline Overlay */}
@@ -295,6 +325,7 @@ export default function Dashboard() {
                         onClick={() => {
                           setSelectedId(lead.id);
                           setShowPipeline(false);
+                          setViewMode("chat");
                         }}
                         className={`p-4 rounded-xl border border-white/[0.06] cursor-pointer transition-all hover:border-emerald-500/40 hover:bg-white/[0.02] ${lead.is_hot_lead ? 'bg-orange-500/5 border-orange-500/20' : 'bg-[#141414]'}`}
                       >
@@ -349,6 +380,15 @@ export default function Dashboard() {
               </svg>
             </button>
             <button 
+              onClick={() => setViewMode(viewMode === "chat" ? "table" : "chat")}
+              className={`p-1.5 rounded-md transition-all ${viewMode === "table" ? "bg-emerald-500/20 text-emerald-400" : "hover:bg-white/10 text-white/40 hover:text-white/90"}`}
+              title="Table View"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18" />
+              </svg>
+            </button>
+            <button 
               onClick={() => setShowPipeline(true)}
               className="p-1.5 rounded-md hover:bg-white/10 text-white/40 hover:text-white/90 transition-all"
               title="Pipeline View"
@@ -391,7 +431,7 @@ export default function Dashboard() {
             return (
               <button
                 key={convo.id}
-                onClick={() => setSelectedId(convo.id)}
+                onClick={() => { setSelectedId(convo.id); setViewMode("chat"); }}
                 className={`w-full text-left px-4 py-3.5 transition-all duration-150 relative group ${
                   isSelected ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
                 }`}
@@ -448,291 +488,372 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Chat Panel */}
+      {/* Main Content Area: Chat or Table */}
       <div className="flex-1 flex flex-col min-w-0">
-        {!selected ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
+        {viewMode === "table" ? (
+          <div className="flex-1 flex flex-col bg-[#0a0a0a] overflow-hidden">
+            {/* Table Header / Filters */}
+            <div className="px-6 py-4 border-b border-white/[0.06] bg-[#141414] flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <h2 className="text-white font-semibold">Lead Database</h2>
+                <div className="h-4 w-[1px] bg-white/10" />
+                <select 
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="bg-white/5 text-xs text-white/60 border border-white/10 rounded px-2 py-1 outline-none focus:border-emerald-500/40"
+                >
+                  <option value="All">All Statuses</option>
+                  {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="text-[10px] text-white/30 uppercase tracking-widest font-bold">
+                {filteredAndSortedLeads.length} Leads Found
+              </div>
             </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-white/40">Select a conversation</p>
-              <p className="text-xs text-white/20 mt-1">Choose from the list to start chatting</p>
+
+            {/* Table */}
+            <div className="flex-1 overflow-auto">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
+                <thead className="sticky top-0 bg-[#141414] z-10">
+                  <tr className="border-b border-white/[0.06]">
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("name"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Name / Phone</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("status"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Status</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("priority"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Priority</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Employment</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Income</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Loan</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">City</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("updated_at"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Last Active</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.03]">
+                  {filteredAndSortedLeads.map((lead) => (
+                    <tr 
+                      key={lead.id} 
+                      onClick={() => {
+                        setSelectedId(lead.id);
+                        setViewMode("chat");
+                      }}
+                      className="hover:bg-white/[0.02] cursor-pointer transition-colors group"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-white/90 font-medium truncate max-w-[150px]">{lead.name || lead.phone}</span>
+                          {lead.is_hot_lead && <span className="text-[10px]">🔥</span>}
+                        </div>
+                        {lead.name && <p className="text-[10px] text-white/30">{lead.phone}</p>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/60 border border-white/5">
+                          {lead.status || "New"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[11px] font-semibold ${lead.priority === 'High' || lead.priority === 'Urgent' ? 'text-red-400' : lead.priority === 'Low' ? 'text-white/30' : 'text-white/60'}`}>
+                          {lead.priority || "Medium"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-white/50">{formatValue(lead.employment_type)}</td>
+                      <td className="px-4 py-3 text-xs text-white/50">{formatValue(lead.income_range)}</td>
+                      <td className="px-4 py-3 text-xs text-white/50">
+                        <span className="text-white/80">{formatValue(lead.loan_amount)}</span>
+                        <p className="text-[10px] text-white/30">{formatValue(lead.loan_type)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-white/50">{lead.city || "N/A"}</td>
+                      <td className="px-4 py-3 text-[11px] text-white/30">{new Date(lead.updated_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (
           <>
-            {/* Chat Header */}
-            <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between" style={{ background: "#141414" }}>
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-800 flex items-center justify-center text-white text-xs font-semibold">
-                  {getInitials(selected.name, selected.phone)}
+            {!selected ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
                 </div>
-                <div>
-                  <h2 className="text-sm font-semibold text-white leading-tight">
-                    {selected.name || selected.phone}
-                  </h2>
-                  <p className="text-xs text-white/40 leading-tight mt-0.5">{selected.phone}</p>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-white/40">Select a conversation</p>
+                  <p className="text-xs text-white/20 mt-1">Choose from the list to start chatting</p>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={toggleMode}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
-                    selected.mode === "agent"
-                      ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/20"
-                      : "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/20"
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${selected.mode === "agent" ? "bg-emerald-400" : "bg-amber-400"}`} />
-                  {selected.mode === "agent" ? "AI Mode" : "Human Mode"}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 flex overflow-hidden">
-              {/* Messages Area */}
-              <div className="flex-1 flex flex-col min-w-0">
-                <div
-                  className="flex-1 overflow-y-auto px-6 py-5 space-y-4"
-                  style={{
-                    backgroundImage: "radial-gradient(circle at 20% 80%, rgba(16,185,129,0.03) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(16,185,129,0.02) 0%, transparent 50%)",
-                  }}
-                >
-                  {messages.map((msg, i) => {
-                    const isUser = msg.role === "user";
-                    const showTime = i === messages.length - 1 || messages[i + 1]?.role !== msg.role;
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex ${isUser ? "justify-start" : "justify-end"}`}
-                      >
-                        <div className={`flex flex-col ${isUser ? "items-start" : "items-end"} max-w-[85%]`}>
-                          <div
-                            className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                              isUser
-                                ? "bg-white/[0.07] text-white/90 rounded-tl-sm border border-white/[0.06]"
-                                : "bg-emerald-600 text-white rounded-tr-sm"
-                            }`}
-                          >
-                            <p className="whitespace-pre-wrap">{msg.content}</p>
-                          </div>
-                          {showTime && (
-                            <div className="flex flex-col items-start gap-1">
-                              <p className="text-[10px] text-white/25 mt-1.5 px-1 flex items-center gap-1">
-                                {!isUser && <span className="text-emerald-500/60 mr-1">AI ·</span>}
-                                {formatTime(msg.created_at)}
-                                {!isUser && <MessageStatus status={msg.status} />}
-                              </p>
-                              {debugMode && (
-                                <p className="text-[9px] text-white/10 font-mono px-1 break-all bg-white/[0.02] rounded p-1">
-                                  ID: {msg.whatsapp_msg_id || 'LOCAL'}<br/>
-                                  Raw Status: {msg.status || 'sent'}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </div>
-
-                {/* Input Bar */}
-                <div className="px-6 py-4 border-t border-white/[0.06]" style={{ background: "#141414" }}>
-                  <div className="flex items-center gap-3 bg-white/[0.06] rounded-xl px-4 py-2.5 border border-white/[0.06] focus-within:border-emerald-500/40 transition-colors">
-                    <input
-                      type="text"
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-                      placeholder="Type a message..."
-                      className="flex-1 bg-transparent text-sm text-white/90 placeholder:text-white/25 focus:outline-none"
-                    />
+            ) : (
+              <>
+                {/* Chat Header */}
+                <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between" style={{ background: "#141414" }}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-800 flex items-center justify-center text-white text-xs font-semibold">
+                      {getInitials(selected.name, selected.phone)}
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-semibold text-white leading-tight">
+                        {selected.name || selected.phone}
+                      </h2>
+                      <p className="text-xs text-white/40 leading-tight mt-0.5">{selected.phone}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
                     <button
-                      onClick={handleSend}
-                      disabled={sending || !input.trim()}
-                      className="w-8 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center flex-shrink-0"
-                      aria-label="Send"
+                      onClick={toggleMode}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                        selected.mode === "agent"
+                          ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/20"
+                          : "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/20"
+                      }`}
                     >
-                      {sending ? (
-                        <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                        </svg>
-                      ) : (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="22" y1="2" x2="11" y2="13" />
-                          <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                        </svg>
-                      )}
+                      <span className={`w-1.5 h-1.5 rounded-full ${selected.mode === "agent" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                      {selected.mode === "agent" ? "AI Mode" : "Human Mode"}
                     </button>
                   </div>
                 </div>
-              </div>
 
-              {/* Lead Details Sidebar */}
-              <div className="w-[280px] border-l border-white/[0.06] flex flex-col" style={{ background: "#141414" }}>
-                <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
-                  <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Lead Details</h3>
-                  <button 
-                    onClick={() => setDebugMode(!debugMode)}
-                    className={`p-1 rounded transition-colors ${debugMode ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-white/5 text-white/20'}`}
-                    title="Toggle Debug Info"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="16" x2="12" y2="12" />
-                      <line x1="12" y1="8" x2="12.01" y2="8" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-5 space-y-6">
-                  {selected.qualified_at ? (
-                    <>
-                      <div className="space-y-4">
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Employment</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.employment_type)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Income (Monthly)</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.income_range)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">CIBIL Score</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.cibil_range)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Loan Requirement</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.loan_amount)} ({formatValue(selected.loan_type)})
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">City</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.city)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Timeline</p>
-                          <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                            {formatValue(selected.timeline)}
-                          </p>
-                        </div>
-                      </div>
-                      
-                      {/* CRM Panel */}
-                      <div className="pt-6 mt-6 border-t border-white/[0.06] space-y-4">
-                        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">CRM Management</h3>
-                        
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Lead Status</p>
-                          <select 
-                            value={selected.status || "New"}
-                            onChange={(e) => updateCRMField("status", e.target.value)}
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
+                <div className="flex-1 flex overflow-hidden">
+                  {/* Messages Area */}
+                  <div className="flex-1 flex flex-col min-w-0">
+                    <div
+                      className="flex-1 overflow-y-auto px-6 py-5 space-y-4"
+                      style={{
+                        backgroundImage: "radial-gradient(circle at 20% 80%, rgba(16,185,129,0.03) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(16,185,129,0.02) 0%, transparent 50%)",
+                      }}
+                    >
+                      {messages.map((msg, i) => {
+                        const isUser = msg.role === "user";
+                        const showTime = i === messages.length - 1 || messages[i + 1]?.role !== msg.role;
+                        return (
+                          <div
+                            key={msg.id}
+                            className={`flex ${isUser ? "justify-start" : "justify-end"}`}
                           >
-                            <option value="New" className="bg-[#141414] text-white">New</option>
-                            <option value="Interested" className="bg-[#141414] text-white">Interested</option>
-                            <option value="In Progress" className="bg-[#141414] text-white">In Progress</option>
-                            <option value="Follow-up Required" className="bg-[#141414] text-white">Follow-up Required</option>
-                            <option value="Closed (Won)" className="bg-[#141414] text-white">Closed (Won)</option>
-                            <option value="Closed (Lost)" className="bg-[#141414] text-white">Closed (Lost)</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Priority</p>
-                          <select 
-                            value={selected.priority || "Medium"}
-                            onChange={(e) => updateCRMField("priority", e.target.value)}
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
-                          >
-                            <option value="Low" className="bg-[#141414] text-white">Low</option>
-                            <option value="Medium" className="bg-[#141414] text-white">Medium</option>
-                            <option value="High" className="bg-[#141414] text-white">High</option>
-                            <option value="Urgent" className="bg-[#141414] text-white">Urgent</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Assigned To</p>
-                          <input 
-                            type="text"
-                            defaultValue={selected.assigned_to || ""}
-                            onBlur={(e) => updateCRMField("assigned_to", e.target.value)}
-                            placeholder="Advisor name..."
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
-                          />
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Follow-up At</p>
-                          <input 
-                            type="datetime-local"
-                            defaultValue={selected.follow_up_at ? new Date(selected.follow_up_at).toISOString().slice(0, 16) : ""}
-                            onBlur={(e) => updateCRMField("follow_up_at", e.target.value)}
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
-                          <span className="text-xs text-white/60">Hot Lead</span>
-                          <button
-                            onClick={() => updateCRMField("is_hot_lead", (!selected.is_hot_lead).toString())}
-                            className={`w-10 h-5 rounded-full transition-colors relative ${selected.is_hot_lead ? 'bg-orange-500' : 'bg-white/10'}`}
-                          >
-                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selected.is_hot_lead ? 'right-1' : 'left-1'}`} />
-                          </button>
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Internal Notes</p>
-                          <textarea 
-                            defaultValue={selected.internal_notes || ""}
-                            onBlur={(e) => updateCRMField("internal_notes", e.target.value)}
-                            placeholder="Add notes about this lead..."
-                            className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 min-h-[80px] resize-none"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-4 border-t border-white/[0.06]">
-                        <p className="text-[10px] text-emerald-500/60 uppercase font-bold mb-1">Status: Qualified</p>
-                        <p className="text-[10px] text-white/20 uppercase font-medium">
-                          At {new Date(selected.qualified_at).toLocaleString()}
-                        </p>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-center space-y-3 px-4">
-                      <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                          <polyline points="14 2 14 8 20 8" />
-                          <line x1="16" y1="13" x2="8" y2="13" />
-                          <line x1="16" y1="17" x2="8" y2="17" />
-                          <polyline points="10 9 9 9 8 9" />
-                        </svg>
-                      </div>
-                      <p className="text-xs text-white/30 leading-relaxed">
-                        Lead form not yet submitted by this user
-                      </p>
+                            <div className={`flex flex-col ${isUser ? "items-start" : "items-end"} max-w-[85%]`}>
+                              <div
+                                className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                                  isUser
+                                    ? "bg-white/[0.07] text-white/90 rounded-tl-sm border border-white/[0.06]"
+                                    : "bg-emerald-600 text-white rounded-tr-sm"
+                                }`}
+                              >
+                                <p className="whitespace-pre-wrap">{msg.content}</p>
+                              </div>
+                              {showTime && (
+                                <div className="flex flex-col items-start gap-1">
+                                  <p className="text-[10px] text-white/25 mt-1.5 px-1 flex items-center gap-1">
+                                    {!isUser && <span className="text-emerald-500/60 mr-1">AI ·</span>}
+                                    {formatTime(msg.created_at)}
+                                    {!isUser && <MessageStatus status={msg.status} />}
+                                  </p>
+                                  {debugMode && (
+                                    <p className="text-[9px] text-white/10 font-mono px-1 break-all bg-white/[0.02] rounded p-1">
+                                      ID: {msg.whatsapp_msg_id || 'LOCAL'}<br/>
+                                      Raw Status: {msg.status || 'sent'}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div ref={messagesEndRef} />
                     </div>
-                  )}
+
+                    {/* Input Bar */}
+                    <div className="px-6 py-4 border-t border-white/[0.06]" style={{ background: "#141414" }}>
+                      <div className="flex items-center gap-3 bg-white/[0.06] rounded-xl px-4 py-2.5 border border-white/[0.06] focus-within:border-emerald-500/40 transition-colors">
+                        <input
+                          type="text"
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+                          placeholder="Type a message..."
+                          className="flex-1 bg-transparent text-sm text-white/90 placeholder:text-white/25 focus:outline-none"
+                        />
+                        <button
+                          onClick={handleSend}
+                          disabled={sending || !input.trim()}
+                          className="w-8 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center flex-shrink-0"
+                          aria-label="Send"
+                        >
+                          {sending ? (
+                            <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                          ) : (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="22" y1="2" x2="11" y2="13" />
+                              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Lead Details Sidebar */}
+                  <div className="w-[280px] border-l border-white/[0.06] flex flex-col" style={{ background: "#141414" }}>
+                    <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Lead Details</h3>
+                      <button 
+                        onClick={() => setDebugMode(!debugMode)}
+                        className={`p-1 rounded transition-colors ${debugMode ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-white/5 text-white/20'}`}
+                        title="Toggle Debug Info"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="12" y1="16" x2="12" y2="12" />
+                          <line x1="12" y1="8" x2="12.01" y2="8" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                      {selected.qualified_at ? (
+                        <>
+                          <div className="space-y-4">
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Employment</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.employment_type)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Income (Monthly)</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.income_range)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">CIBIL Score</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.cibil_range)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Loan Requirement</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.loan_amount)} ({formatValue(selected.loan_type)})
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">City</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.city)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Timeline</p>
+                              <p className="text-sm text-white/90 font-medium bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                                {formatValue(selected.timeline)}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          {/* CRM Panel */}
+                          <div className="pt-6 mt-6 border-t border-white/[0.06] space-y-4">
+                            <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">CRM Management</h3>
+                            
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Lead Status</p>
+                              <select 
+                                value={selected.status || "New"}
+                                onChange={(e) => updateCRMField("status", e.target.value)}
+                                className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
+                              >
+                                <option value="New" className="bg-[#141414] text-white">New</option>
+                                <option value="Interested" className="bg-[#141414] text-white">Interested</option>
+                                <option value="In Progress" className="bg-[#141414] text-white">In Progress</option>
+                                <option value="Follow-up Required" className="bg-[#141414] text-white">Follow-up Required</option>
+                                <option value="Closed (Won)" className="bg-[#141414] text-white">Closed (Won)</option>
+                                <option value="Closed (Lost)" className="bg-[#141414] text-white">Closed (Lost)</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Priority</p>
+                              <select 
+                                value={selected.priority || "Medium"}
+                                onChange={(e) => updateCRMField("priority", e.target.value)}
+                                className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
+                              >
+                                <option value="Low" className="bg-[#141414] text-white">Low</option>
+                                <option value="Medium" className="bg-[#141414] text-white">Medium</option>
+                                <option value="High" className="bg-[#141414] text-white">High</option>
+                                <option value="Urgent" className="bg-[#141414] text-white">Urgent</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Assigned To</p>
+                              <input 
+                                type="text"
+                                defaultValue={selected.assigned_to || ""}
+                                onBlur={(e) => updateCRMField("assigned_to", e.target.value)}
+                                placeholder="Advisor name..."
+                                className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                              />
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Follow-up At</p>
+                              <input 
+                                type="datetime-local"
+                                defaultValue={selected.follow_up_at ? new Date(selected.follow_up_at).toISOString().slice(0, 16) : ""}
+                                onBlur={(e) => updateCRMField("follow_up_at", e.target.value)}
+                                className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40"
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2 border border-white/[0.03]">
+                              <span className="text-xs text-white/60">Hot Lead</span>
+                              <button
+                                onClick={() => updateCRMField("is_hot_lead", (!selected.is_hot_lead).toString())}
+                                className={`w-10 h-5 rounded-full transition-colors relative ${selected.is_hot_lead ? 'bg-orange-500' : 'bg-white/10'}`}
+                              >
+                                <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selected.is_hot_lead ? 'right-1' : 'left-1'}`} />
+                              </button>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] text-white/30 uppercase font-medium mb-1.5">Internal Notes</p>
+                              <textarea 
+                                defaultValue={selected.internal_notes || ""}
+                                onBlur={(e) => updateCRMField("internal_notes", e.target.value)}
+                                placeholder="Add notes about this lead..."
+                                className="w-full bg-white/5 text-sm text-white/90 font-medium rounded-lg px-3 py-2 border border-white/[0.03] focus:outline-none focus:border-emerald-500/40 min-h-[80px] resize-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-white/[0.06]">
+                            <p className="text-[10px] text-emerald-500/60 uppercase font-bold mb-1">Status: Qualified</p>
+                            <p className="text-[10px] text-white/20 uppercase font-medium">
+                              At {new Date(selected.qualified_at).toLocaleString()}
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-center space-y-3 px-4">
+                          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                              <polyline points="14 2 14 8 20 8" />
+                              <line x1="16" y1="13" x2="8" y2="13" />
+                              <line x1="16" y1="17" x2="8" y2="17" />
+                              <polyline points="10 9 9 9 8 9" />
+                            </svg>
+                          </div>
+                          <p className="text-xs text-white/30 leading-relaxed">
+                            Lead form not yet submitted by this user
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
           </>
         )}
       </div>
