@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { logError } from "@/lib/logger";
 
 export async function PATCH(
   request: NextRequest,
@@ -29,8 +30,23 @@ export async function PATCH(
     .single();
 
   if (error) {
+    await logError({
+      conversation_id: id,
+      component: "api-patch",
+      level: "error",
+      message: `Failed to update conversation: ${error.message}`,
+      metadata: { updateData }
+    });
     return Response.json({ error: error.message }, { status: 500 });
   }
+
+  await logError({
+    conversation_id: id,
+    component: "api-patch",
+    level: "info",
+    message: `Updated fields: ${Object.keys(updateData).join(", ")}`,
+    metadata: { updateData }
+  });
 
   return Response.json(data);
 }

@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { logError } from "./logger";
 const HARVEY_SYSTEM_PROMPT = `You are Team Finjoat, a professional personal loan advisor for Finjoat in India. 
 
 Your goal is to answer user queries concisely and directly. 
@@ -109,7 +110,17 @@ export async function getAIResponse(
           console.log(`[AI] Attempting ${modelName} (Rotation ${rotation + 1}, Try ${i + 1})...`);
           const result = await chat.sendMessage(lastUserMessage);
           const response = await result.response;
-          return response.text();
+          const aiText = response.text();
+          
+          await logError({
+            conversation_id: conversation?.id,
+            component: "ai-engine",
+            level: "info",
+            message: `AI success with ${modelName}`,
+            metadata: { model: modelName, rotation: rotation + 1, try: i + 1 }
+          });
+
+          return aiText;
         } catch (error: any) {
           console.error(`[AI] ${modelName} fail (Rot ${rotation + 1}, Try ${i + 1}):`, error.message);
           lastError = error;
@@ -127,6 +138,14 @@ export async function getAIResponse(
       }
     }
   }
+
+  await logError({
+    conversation_id: conversation?.id,
+    component: "ai-engine",
+    level: "error",
+    message: `AI failed after all models: ${lastError?.message}`,
+    metadata: { modelsTried: modelsToTry }
+  });
 
   throw lastError || new Error("Failed to generate AI response after trying all available models");
 }

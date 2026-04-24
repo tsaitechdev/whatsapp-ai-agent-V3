@@ -274,16 +274,16 @@ async function processWebhook(body: any, host: string = "") {
         console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
 
         // LEAD SCORING LOGIC
-        const income = flowData.income_range || flowData.income;
-        const cibil = flowData.cibil_range || flowData.cibil;
+        const incomeScore = flowData.income_range || flowData.income;
+        const cibilScore = flowData.cibil_range || flowData.cibil;
         const isHotLead = 
-          (income === "above100" || income === "50_100") && 
-          (cibil === "750_plus" || cibil === "700_750");
+          (incomeScore === "above100" || incomeScore === "50_100") && 
+          (cibilScore === "750_plus" || cibilScore === "700_750");
 
         const updatePayload = {
           employment_type: flowData.employment_type || flowData.employment,
-          income_range: income,
-          cibil_range: cibil,
+          income_range: incomeScore,
+          cibil_range: cibilScore,
           loan_type: flowData.loan_type || flowData.type,
           loan_amount: flowData.loan_amount || flowData.amount,
           city: flowData.city,
@@ -295,32 +295,7 @@ async function processWebhook(body: any, host: string = "") {
           priority: isHotLead ? 'High' : 'Medium'
         };
 
-        console.log(`[Webhook] Updating conversation ${conversation.id} with payload:`, JSON.stringify(updatePayload));
-        
-        // Wrap update in try/catch to ensure we still send acknowledgement even if CRM fields fail
-        try {
-          const { error: updateError } = await supabase.from("conversations").update(updatePayload).eq("id", conversation.id);
-          if (updateError) {
-            console.error("[Webhook] FAIL: Error updating conversation with flow data:", updateError);
-            await logError({
-              conversation_id: conversation.id,
-              component: "webhook-flow",
-              level: "warn",
-              message: `Conversation update failed: ${updateError.message}`,
-              metadata: { updatePayload }
-            });
-          } else {
-            console.log("[Webhook] PASS: Conversation updated with flow data");
-          }
-        } catch (dbErr: any) {
-          console.error("[Webhook] DB Crash during conversation update:", dbErr);
-        }
-
-        // Verify the update by fetching it back for logs
-        const { data: verifyConvo } = await supabase.from("conversations").select("*").eq("id", conversation.id).single();
-        console.log("[Webhook] DB State after update attempt:", JSON.stringify(verifyConvo));
-
-        // Store the form submission summary for the dashboard
+        // 1. SEND ACKNOWLEDGMENT FIRST (Safety)
         const amountStr = formatValue(flowData.loan_amount || flowData.amount);
         const typeStr = formatValue(flowData.loan_type || flowData.type);
         const cityStr = flowData.city || "N/A";
@@ -338,17 +313,12 @@ async function processWebhook(body: any, host: string = "") {
           
           console.log("[Webhook] Sending acknowledgment...");
           const confRes = await sendWhatsAppMessage(phone, confirmation);
-          console.log("[Webhook] Acknowledgment response:", JSON.stringify(confRes));
           const confMsgId = confRes?.messages?.[0]?.id;
 
           // Send CIBIL guide PDF
-          // Use a more reliable way to get the base URL
           const baseUrl = host.includes("localhost") ? `http://${host}` : `https://${host}`;
           const pdfUrl = `${baseUrl}/cibil-guide.pdf`;
-          
-          console.log(`[Webhook] Sending CIBIL guide PDF: ${pdfUrl}`);
-          const docRes = await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
-          console.log("[Webhook] PDF response:", JSON.stringify(docRes));
+          await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
 
           if (confMsgId) {
             await supabase.from("messages").insert({
@@ -360,12 +330,26 @@ async function processWebhook(body: any, host: string = "") {
           }
         } catch (msgErr: any) {
           console.error("[Webhook] Error during acknowledgment sending:", msgErr);
-          await logError({
-            conversation_id: conversation.id,
-            component: "webhook-acknowledgment",
-            message: `Acknowledgment/PDF failed: ${msgErr.message}`,
-            metadata: { phone }
-          });
+        }
+
+        // 2. UPDATE CRM DATABASE LAST
+        console.log(`[Webhook] Updating CRM data for ${conversation.id}...`);
+        try {
+          const { error: updateError } = await supabase.from("conversations").update(updatePayload).eq("id", conversation.id);
+          if (updateError) {
+            console.error("[Webhook] FAIL: Error updating CRM data:", updateError.message);
+            await logError({
+              conversation_id: conversation.id,
+              component: "webhook-crm",
+              level: "warn",
+              message: `CRM Update Failed: ${updateError.message}. Check if columns exist.`,
+              metadata: { updatePayload }
+            });
+          } else {
+            console.log("[Webhook] PASS: CRM data updated");
+          }
+        } catch (dbErr: any) {
+          console.error("[Webhook] CRM Update Crash:", dbErr);
         }
 
         console.log("[Webhook] PASS: Interactive nfm_reply processing complete");
