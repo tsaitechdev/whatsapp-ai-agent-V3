@@ -258,18 +258,6 @@ async function processWebhook(body: any, host: string = "") {
       try {
         console.log("[Webhook] Processing flow reply...");
         
-        // Check for duplicate processing of the same message ID
-        const { data: existingMsg } = await supabase
-          .from("messages")
-          .select("id")
-          .eq("whatsapp_msg_id", whatsappMsgId)
-          .single();
-        
-        if (existingMsg) {
-          console.log("[Webhook] Duplicate flow reply ignored.");
-          return;
-        }
-
         const flowData = JSON.parse(message.interactive.nfm_reply.response_json);
         console.log("[Webhook] Flow Data Received:", JSON.stringify(flowData));
 
