@@ -124,7 +124,15 @@ export default function Dashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations" },
-        () => fetchConversations()
+        (payload) => {
+          console.log("Conversation changed:", payload);
+          const updatedConvo = payload.new as ConversationWithLastMessage;
+          setConversations((prev) => 
+            prev.map(c => c.id === updatedConvo.id ? { ...c, ...updatedConvo } : c)
+          );
+          // Also fetch full list to be safe
+          fetchConversations();
+        }
       )
       .subscribe();
 
@@ -500,10 +508,10 @@ export default function Dashboard() {
                 <select 
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="bg-white/5 text-xs text-white/60 border border-white/10 rounded px-2 py-1 outline-none focus:border-emerald-500/40"
+                  className="bg-white/5 text-xs text-white border border-white/10 rounded px-2 py-1 outline-none focus:border-emerald-500/40 appearance-none cursor-pointer"
                 >
-                  <option value="All">All Statuses</option>
-                  {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                  <option value="All" className="bg-[#141414] text-white">All Statuses</option>
+                  {statuses.map(s => <option key={s} value={s} className="bg-[#141414] text-white">{s}</option>)}
                 </select>
               </div>
               <div className="text-[10px] text-white/30 uppercase tracking-widest font-bold">
@@ -513,45 +521,71 @@ export default function Dashboard() {
 
             {/* Table */}
             <div className="flex-1 overflow-auto">
-              <table className="w-full text-left border-collapse min-w-[1000px]">
+              <table className="w-full text-left border-collapse min-w-[1200px]">
                 <thead className="sticky top-0 bg-[#141414] z-10">
                   <tr className="border-b border-white/[0.06]">
                     <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("name"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Name / Phone</th>
-                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("status"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Status</th>
-                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("priority"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Priority</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Priority</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Assigned To</th>
                     <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Employment</th>
                     <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Income</th>
                     <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Loan</th>
-                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">City</th>
                     <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider cursor-pointer hover:text-white/60" onClick={() => { setSortField("updated_at"); setSortOrder(sortOrder === "asc" ? "desc" : "asc"); }}>Last Active</th>
+                    <th className="px-4 py-3 text-[10px] font-bold text-white/40 uppercase tracking-wider">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.03]">
                   {filteredAndSortedLeads.map((lead) => (
                     <tr 
                       key={lead.id} 
-                      onClick={() => {
-                        setSelectedId(lead.id);
-                        setViewMode("chat");
-                      }}
-                      className="hover:bg-white/[0.02] cursor-pointer transition-colors group"
+                      className="hover:bg-white/[0.02] transition-colors group"
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="text-sm text-white/90 font-medium truncate max-w-[150px]">{lead.name || lead.phone}</span>
-                          {lead.is_hot_lead && <span className="text-[10px]">🔥</span>}
+                          {lead.is_hot_lead && <span title="Hot Lead" className="text-orange-500">🔥</span>}
                         </div>
                         {lead.name && <p className="text-[10px] text-white/30">{lead.phone}</p>}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/60 border border-white/5">
-                          {lead.status || "New"}
-                        </span>
+                        <select 
+                          value={lead.status || "New"}
+                          onChange={(e) => {
+                             setSelectedId(lead.id); // Set active lead context for update
+                             updateCRMField("status", e.target.value);
+                          }}
+                          className="bg-white/5 text-[11px] text-white/60 border border-white/5 rounded px-2 py-0.5 outline-none focus:border-emerald-500/40"
+                        >
+                          {statuses.map(s => <option key={s} value={s} className="bg-[#141414] text-white">{s}</option>)}
+                        </select>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`text-[11px] font-semibold ${lead.priority === 'High' || lead.priority === 'Urgent' ? 'text-red-400' : lead.priority === 'Low' ? 'text-white/30' : 'text-white/60'}`}>
-                          {lead.priority || "Medium"}
-                        </span>
+                        <select 
+                          value={lead.priority || "Medium"}
+                          onChange={(e) => {
+                             setSelectedId(lead.id);
+                             updateCRMField("priority", e.target.value);
+                          }}
+                          className={`bg-white/5 text-[11px] border border-white/5 rounded px-2 py-0.5 outline-none focus:border-emerald-500/40 ${lead.priority === 'High' || lead.priority === 'Urgent' ? 'text-red-400' : 'text-white/60'}`}
+                        >
+                          <option value="Low" className="bg-[#141414] text-white">Low</option>
+                          <option value="Medium" className="bg-[#141414] text-white">Medium</option>
+                          <option value="High" className="bg-[#141414] text-white">High</option>
+                          <option value="Urgent" className="bg-[#141414] text-white">Urgent</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        <input 
+                          type="text"
+                          defaultValue={lead.assigned_to || ""}
+                          onBlur={(e) => {
+                            setSelectedId(lead.id);
+                            updateCRMField("assigned_to", e.target.value);
+                          }}
+                          placeholder="Assign..."
+                          className="bg-white/5 text-[11px] text-white/60 border border-white/5 rounded px-2 py-0.5 outline-none focus:border-emerald-500/40 w-full max-w-[100px]"
+                        />
                       </td>
                       <td className="px-4 py-3 text-xs text-white/50">{formatValue(lead.employment_type)}</td>
                       <td className="px-4 py-3 text-xs text-white/50">{formatValue(lead.income_range)}</td>
@@ -559,8 +593,18 @@ export default function Dashboard() {
                         <span className="text-white/80">{formatValue(lead.loan_amount)}</span>
                         <p className="text-[10px] text-white/30">{formatValue(lead.loan_type)}</p>
                       </td>
-                      <td className="px-4 py-3 text-xs text-white/50">{lead.city || "N/A"}</td>
                       <td className="px-4 py-3 text-[11px] text-white/30">{new Date(lead.updated_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</td>
+                      <td className="px-4 py-3">
+                        <button 
+                          onClick={() => {
+                            setSelectedId(lead.id);
+                            setViewMode("chat");
+                          }}
+                          className="p-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600 hover:text-white transition-all text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          Chat
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -162,18 +162,18 @@ async function processWebhook(body: any, host: string = "") {
     const value = changes?.value;
 
     // 1. Handle Message Status Updates (Sent, Delivered, Read)
-    if (value?.statuses?.[0]) {
-      const statusUpdate = value.statuses[0];
-      const whatsappMsgId = statusUpdate.id;
-      const status = statusUpdate.status; // 'delivered' or 'read'
+    if (value?.statuses) {
+      for (const statusUpdate of value.statuses) {
+        const whatsappMsgId = statusUpdate.id;
+        const status = statusUpdate.status; // 'delivered' or 'read'
 
-      console.log(`[Webhook] Status Update: ${whatsappMsgId} is now ${status}`);
-      
-      await supabase
-        .from("messages")
-        .update({ status })
-        .eq("whatsapp_msg_id", whatsappMsgId);
-      
+        console.log(`[Webhook] Status Update: ${whatsappMsgId} is now ${status}`);
+        
+        await supabase
+          .from("messages")
+          .update({ status })
+          .eq("whatsapp_msg_id", whatsappMsgId);
+      }
       return;
     }
 
@@ -338,21 +338,34 @@ async function processWebhook(body: any, host: string = "") {
           
           console.log("[Webhook] Sending acknowledgment...");
           const confRes = await sendWhatsAppMessage(phone, confirmation);
+          console.log("[Webhook] Acknowledgment response:", JSON.stringify(confRes));
           const confMsgId = confRes?.messages?.[0]?.id;
 
           // Send CIBIL guide PDF
-          const pdfUrl = `https://${host}/cibil-guide.pdf`;
+          // Use a more reliable way to get the base URL
+          const baseUrl = host.includes("localhost") ? `http://${host}` : `https://${host}`;
+          const pdfUrl = `${baseUrl}/cibil-guide.pdf`;
+          
           console.log(`[Webhook] Sending CIBIL guide PDF: ${pdfUrl}`);
-          await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
+          const docRes = await sendWhatsAppDocument(phone, pdfUrl, "finjoat_cibil_guide.pdf", "Here is a CIBIL guide from Team Finjoat to help you understand your credit score better.");
+          console.log("[Webhook] PDF response:", JSON.stringify(docRes));
 
-          await supabase.from("messages").insert({
-            conversation_id: conversation.id,
-            role: "assistant",
-            content: confirmation,
-            whatsapp_msg_id: confMsgId
-          });
+          if (confMsgId) {
+            await supabase.from("messages").insert({
+              conversation_id: conversation.id,
+              role: "assistant",
+              content: confirmation,
+              whatsapp_msg_id: confMsgId
+            });
+          }
         } catch (msgErr: any) {
           console.error("[Webhook] Error during acknowledgment sending:", msgErr);
+          await logError({
+            conversation_id: conversation.id,
+            component: "webhook-acknowledgment",
+            message: `Acknowledgment/PDF failed: ${msgErr.message}`,
+            metadata: { phone }
+          });
         }
 
         console.log("[Webhook] PASS: Interactive nfm_reply processing complete");
@@ -376,6 +389,13 @@ async function processWebhook(body: any, host: string = "") {
       // Reset alreadyQualified check by fetching the latest state
       const { data: latestConvo } = await supabase.from("conversations").select("qualified_at, mode, updated_at, income_range, employment_type, cibil_range, loan_amount, loan_type, city").eq("id", conversation.id).single();
       const isActuallyQualified = !!latestConvo?.qualified_at;
+
+      // SAFETY: If lead was JUST qualified (last 5 seconds), skip AI to allow acknowledgment to send first
+      const qualifiedRecently = latestConvo?.qualified_at && (Date.now() - new Date(latestConvo.qualified_at).getTime() < 5000);
+      if (qualifiedRecently) {
+        console.log("[Webhook] Lead recently qualified, skipping AI for now.");
+        return;
+      }
 
       console.log(`[Webhook] State: qual=${isActuallyQualified}, mode=${latestConvo?.mode}, text="${text}"`);
 
